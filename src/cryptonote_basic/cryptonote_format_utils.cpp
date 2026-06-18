@@ -1620,7 +1620,7 @@ namespace cryptonote
       static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
       epee::string_tools::hex_to_pod(longhash_202612, res);
     }
-    else if (major_version >= RX_BLOCK_VERSION) // RandomX
+    else if (major_version >= RX_BLOCK_VERSION) // Yespower
     {
       crypto::rx_slow_hash(seed_hash.data, block_hashing_blob.data(), block_hashing_blob.size(), res.data);
     }
