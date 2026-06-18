@@ -1,4 +1,5 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2024, The ORI Project
+// Copyright (c) 2024, Mr. Nobody
 // 
 // All rights reserved.
 // 

@@ -432,7 +432,7 @@ namespace tools
   {
     ub_ctx *ctx = ub_ctx_create();
     if (!ctx) return false; // cheat a bit, should not happen unless OOM
-    char *monero = strdup("monero"), *unbound = strdup("unbound");
+    char *monero = strdup("ori"), *unbound = strdup("unbound");
     ub_ctx_zone_add(ctx, monero, unbound); // this calls ub_ctx_finalize first, then errors out with UB_SYNTAX
     free(unbound);
     free(monero);

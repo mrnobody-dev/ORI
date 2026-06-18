@@ -1,4 +1,5 @@
-// Copyright (c) 2014-2026, The Monero Project
+// Copyright (c) 2014-2024, The ORI Project
+// Copyright (c) 2024, Mr. Nobody
 //
 // All rights reserved.
 //
@@ -85,7 +86,7 @@ DISABLE_VS_WARNINGS(4267)
 #define MERROR_VER(x) MCERROR("verify", x)
 
 // used to overestimate the block reward when estimating a per kB to use
-#define BLOCK_REWARD_OVERESTIMATE (10 * 1000000000000)
+#define BLOCK_REWARD_OVERESTIMATE (100 * COIN)
 
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
@@ -349,6 +350,9 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     db_wtxn_guard wtxn_guard(m_db);
     add_new_block(bl, bvc);
     CHECK_AND_ASSERT_MES(!bvc.m_verifivation_failed, false, "Failed to add genesis block to blockchain");
+    crypto::hash genesis_hash = get_block_hash(bl);
+    MINFO("Genesis block added: height=0, hash=" << genesis_hash << ", nonce=" << bl.nonce);
+    MINFO("IMPORTANT: Save this genesis hash for checkpoint hardcoding!");
   }
   // TODO: if blockchain load successful, verify blockchain against both
   //       hard-coded and runtime-loaded (and enforced) checkpoints.
@@ -1966,7 +1970,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     bei.height = prev_height + 1;
     uint64_t block_reward = get_outs_money_amount(b.miner_tx);
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
-    bei.already_generated_coins = (block_reward < (MONEY_SUPPLY - prev_generated_coins)) ? prev_generated_coins + block_reward : MONEY_SUPPLY;
+    bei.already_generated_coins = (block_reward < (ORI_MAX_SUPPLY_ATOMIC - prev_generated_coins)) ? prev_generated_coins + block_reward : ORI_MAX_SUPPLY_ATOMIC;
 
     // verify that the block's timestamp is within the acceptable range
     // (not earlier than the median of the last X blocks)
@@ -4286,11 +4290,8 @@ leave:
   // populate various metadata about the block to be stored alongside it.
   block_weight = cumulative_block_weight;
   cumulative_difficulty = current_diffic;
-  // In the "tail" state when the minimum subsidy (implemented in get_block_reward) is in effect, the number of
-  // coins will eventually exceed MONEY_SUPPLY and overflow a uint64. To prevent overflow, cap already_generated_coins
-  // at MONEY_SUPPLY. already_generated_coins is only used to compute the block subsidy and MONEY_SUPPLY yields a
-  // subsidy of 0 under the base formula and therefore the minimum subsidy >0 in the tail state.
-  already_generated_coins = base_reward < (MONEY_SUPPLY-already_generated_coins) ? already_generated_coins + base_reward : MONEY_SUPPLY;
+  // Enforce hard cap at ORI_MAX_SUPPLY_ATOMIC (210,000,000 ORI)
+  already_generated_coins = base_reward < (ORI_MAX_SUPPLY_ATOMIC - already_generated_coins) ? already_generated_coins + base_reward : ORI_MAX_SUPPLY_ATOMIC;
   if(blockchain_height)
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);
 
@@ -4430,7 +4431,9 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
   if (hf_version < HF_VERSION_LONG_TERM_BLOCK_WEIGHT)
     return block_weight;
 
-  uint64_t long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
+  uint64_t long_term_median = 0;
+  if (nblocks > 0)
+    long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 
   uint64_t short_term_constraint;
@@ -4470,7 +4473,9 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
   else
   {
     const uint64_t nblocks = std::min<uint64_t>(m_long_term_block_weights_window, db_height);
-    const uint64_t long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
+    uint64_t long_term_median = 0;
+    if (nblocks > 0)
+      long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
 
     m_long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 

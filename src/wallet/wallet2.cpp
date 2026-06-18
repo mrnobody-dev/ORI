@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2024, The ORI Project
 // 
 // All rights reserved.
 // 
@@ -170,7 +170,7 @@ namespace
   std::string get_default_ringdb_path()
   {
     boost::filesystem::path dir = tools::get_default_data_dir();
-    // remove .bitmonero, replace with .shared-ringdb
+    // remove .ori, replace with .shared-ringdb
     dir = dir.remove_filename();
     dir /= ".shared-ringdb";
     return dir.string();
@@ -1071,7 +1071,7 @@ uint64_t gamma_picker::pick()
     // 'current_num_outputs - n', then randomly select an output from the block where that output appears.
     // Source code to paper: https://github.com/maltemoeser/moneropaper
     //
-    // Due to the 'default spendable age' mechanic in Monero, 'current_num_outputs' only contains
+    // Due to the 'default spendable age' mechanic in ORI, 'current_num_outputs' only contains
     // currently *unlocked* outputs, which means the earliest output that can be selected is not at the chain tip!
     // Therefore, we must offset 'x' so it matches up with the timing of the outputs being considered. We do
     // this by saying if 'x` equals the expected age of the first unlocked output (compared to the current
@@ -6438,7 +6438,7 @@ bool wallet2::check_hard_fork_version(cryptonote::network_type nettype, const st
       uint64_t daemon_missed_fork_height = wallet_hard_forks[daemon_hard_forks.size()].height;
 
       // If the daemon missed the fork, then technically it is no longer part of
-      // the Monero network. Don't connect.
+      // the ORI network. Don't connect.
       bool daemon_missed_fork = height >= daemon_missed_fork_height || target_height >= daemon_missed_fork_height;
       if (daemon_missed_fork)
         return false;
@@ -6448,7 +6448,7 @@ bool wallet2::check_hard_fork_version(cryptonote::network_type nettype, const st
       uint64_t wallet_missed_fork_height = daemon_hard_forks[wallet_num_hard_forks].second;
 
       // If the wallet missed the fork, then technically it is no longer able
-      // to communicate with the Monero network. Don't connect.
+      // to communicate with the ORI network. Don't connect.
       bool wallet_missed_fork = height >= wallet_missed_fork_height || target_height >= wallet_missed_fork_height;
       if (wallet_missed_fork)
         return false;
@@ -15158,7 +15158,7 @@ mms::multisig_wallet_state wallet2::get_multisig_wallet_state() const
   state.num_transfer_details = m_transfers.size();
   if (state.multisig)
   {
-    THROW_WALLET_EXCEPTION_IF(!m_original_keys_available, error::wallet_internal_error, "MMS use not possible because own original Monero address not available");
+    THROW_WALLET_EXCEPTION_IF(!m_original_keys_available, error::wallet_internal_error, "MMS use not possible because own original ORI address not available");
     state.address = m_original_address;
     state.view_secret_key = m_original_view_secret_key;
   }

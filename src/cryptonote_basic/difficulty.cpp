@@ -1,4 +1,5 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2024, The ORI Project
+// Copyright (c) 2024, Mr. Nobody
 //
 // All rights reserved.
 //
@@ -201,13 +202,13 @@ namespace cryptonote {
   }
 
   difficulty_type next_difficulty(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds) {
-    //cutoff DIFFICULTY_LAG
+    // LWMA-3 difficulty algorithm for ORI (30s block time)
+    // Uses linearly weighted moving average of solve times
     if(timestamps.size() > DIFFICULTY_WINDOW)
     {
       timestamps.resize(DIFFICULTY_WINDOW);
       cumulative_difficulties.resize(DIFFICULTY_WINDOW);
     }
-
 
     size_t length = timestamps.size();
     assert(length == cumulative_difficulties.size());
@@ -217,25 +218,35 @@ namespace cryptonote {
     static_assert(DIFFICULTY_WINDOW >= 2, "Window is too small");
     assert(length <= DIFFICULTY_WINDOW);
     sort(timestamps.begin(), timestamps.end());
-    size_t cut_begin, cut_end;
-    static_assert(2 * DIFFICULTY_CUT <= DIFFICULTY_WINDOW - 2, "Cut length is too large");
-    if (length <= DIFFICULTY_WINDOW - 2 * DIFFICULTY_CUT) {
-      cut_begin = 0;
-      cut_end = length;
-    } else {
-      cut_begin = (length - (DIFFICULTY_WINDOW - 2 * DIFFICULTY_CUT) + 1) / 2;
-      cut_end = cut_begin + (DIFFICULTY_WINDOW - 2 * DIFFICULTY_CUT);
+
+    // LWMA: weighted sum of time intervals, linear weights
+    boost::multiprecision::uint256_t weighted_sum = 0;
+    uint64_t total_weight = 0;
+
+    for (size_t i = 1; i < length; i++) {
+      uint64_t dt = timestamps[i] - timestamps[i-1];
+      // Clamp extreme outliers to prevent timestamp manipulation
+      if (dt > 10 * target_seconds)
+        dt = 10 * target_seconds;
+      weighted_sum += (boost::multiprecision::uint256_t)i * dt;
+      total_weight += i;
     }
-    assert(/*cut_begin >= 0 &&*/ cut_begin + 2 <= cut_end && cut_end <= length);
-    uint64_t time_span = timestamps[cut_end - 1] - timestamps[cut_begin];
-    if (time_span == 0) {
-      time_span = 1;
+
+    if (total_weight == 0 || weighted_sum == 0) {
+      return 1;
     }
-    difficulty_type total_work = cumulative_difficulties[cut_end - 1] - cumulative_difficulties[cut_begin];
+
+    difficulty_type total_work = cumulative_difficulties.back() - cumulative_difficulties.front();
     assert(total_work > 0);
-    boost::multiprecision::uint256_t res =  (boost::multiprecision::uint256_t(total_work) * target_seconds + time_span - 1) / time_span;
-    if(res > max128bit)
-      return 0; // to behave like previous implementation, may be better return max128bit?
+
+    // LWMA formula: next_diff = (total_work * T * N) / (2 * weighted_sum)
+    // Where N = length (number of timestamps = number of intervals + 1)
+    boost::multiprecision::uint256_t res = (boost::multiprecision::uint256_t(total_work) * target_seconds * length) / (weighted_sum * 2);
+
+    if (res < 1)
+      res = 1;
+    if (res > max128bit)
+      return 0;
     return res.convert_to<difficulty_type>();
   }
 

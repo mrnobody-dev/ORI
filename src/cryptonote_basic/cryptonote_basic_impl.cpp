@@ -1,4 +1,5 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2024, The ORI Project
+// Copyright (c) 2024, Mr. Nobody
 //
 // All rights reserved.
 //
@@ -81,15 +82,57 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    static_assert(DIFFICULTY_TARGET_V2%60==0&&DIFFICULTY_TARGET_V1%60==0,"difficulty targets must be a multiple of 60");
-    const int target = version < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
-    const int target_minutes = target / 60;
-    const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
+    (void)version;
 
-    uint64_t base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor;
-    if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
+    // ORI emission: Bitcoin-style halving + tail emission
+    // Initial reward: 35 ORI, halving every 3,000,000 blocks
+    // After reward drops below 0.3 ORI, use tail emission (0.3 ORI/block)
+    // Hard cap: 210,000,000 ORI (ORI_MAX_SUPPLY_ATOMIC)
+
+    if (already_generated_coins >= ORI_MAX_SUPPLY_ATOMIC)
     {
-      base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
+      reward = 0;
+      return true;
+    }
+
+    // Halving calculation: reward = INITIAL_REWARD / 2^(height / HALVING_INTERVAL)
+    // Each halving era produces INITIAL_REWARD * HALVING_INTERVAL / 2^n coins.
+    // Era 0: 0-3M blocks, 35 ORI/block, total 105M ORI
+    // Era 1: 3M-6M blocks, 17.5 ORI/block, total 52.5M ORI
+    // Era 2: 6M-9M blocks, 8.75 ORI/block, total 26.25M ORI
+    // Era 3: 9M-12M blocks, 4.375 ORI/block, total 13.125M ORI
+    // Era 4: 12M-15M blocks, 2.1875 ORI/block, total 6.5625M ORI
+    // Era 5: 15M-18M blocks, ~1.094 ORI/block, total 3.28125M ORI
+    // Era 6: 18M-21M blocks, ~0.547 ORI/block, total 1.640625M ORI
+    // Era 7: 21M-24M blocks, ~0.273 ORI/block (< 0.3 tail), switch to tail
+
+    uint64_t era_supply = ORI_INITIAL_REWARD_IN_COIN * COIN * ORI_HALVING_INTERVAL_BLOCKS;
+    uint64_t cumulative = 0;
+    unsigned int halvings = 0;
+
+    while (halvings < 7 && cumulative + era_supply <= already_generated_coins)
+    {
+      cumulative += era_supply;
+      era_supply >>= 1;
+      halvings++;
+    }
+
+    // Calculate base reward for current halving era
+    uint64_t base_reward;
+    if (halvings >= 7)
+    {
+      // Tail emission: 0.3 ORI/block forever
+      base_reward = ORI_TAIL_EMISSION_ATOMIC;
+    }
+    else
+    {
+      base_reward = (ORI_INITIAL_REWARD_IN_COIN * COIN) >> halvings;
+    }
+
+    // Cap to not exceed max supply
+    if (already_generated_coins + base_reward > ORI_MAX_SUPPLY_ATOMIC)
+    {
+      base_reward = ORI_MAX_SUPPLY_ATOMIC - already_generated_coins;
     }
 
     uint64_t full_reward_zone = get_min_block_weight(version);
@@ -110,8 +153,6 @@ namespace cryptonote {
     }
 
     uint64_t product_hi;
-    // BUGFIX: 32-bit saturation bug (e.g. ARM7), the result was being
-    // treated as 32-bit by default.
     uint64_t multiplicand = 2 * median_weight - current_block_weight;
     multiplicand *= current_block_weight;
     uint64_t product_lo = mul128(base_reward, multiplicand, &product_hi);

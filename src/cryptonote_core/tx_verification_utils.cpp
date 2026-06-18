@@ -1,4 +1,4 @@
-// Copyright (c) 2023-2024, The Monero Project
+// Copyright (c) 2023-2024, The ORI Project
 //
 // All rights reserved.
 //
@@ -326,7 +326,7 @@ uint64_t get_transaction_weight_limit(const uint8_t hf_version)
 
 bool ver_input_proofs_rings(transaction& tx, const rct::ctkeyM &dereferenced_mix_ring)
 {
-    // Hello future Monero dev! If you got this assert, read the following carefully:
+    // Hello future ORI dev! If you got this assert, read the following carefully:
     //
     // For this version of RCT, the way we guaranteed that verification caches do not generate false
     // positives (and thus possibly enabling double spends) is we take a hash of two things. One,
