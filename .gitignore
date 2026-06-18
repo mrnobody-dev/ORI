@@ -1,6 +1,8 @@
 .DS_Store
 /doc
 /build
+/build-*/
+find_prefix.py
 /tags
 log/
 
