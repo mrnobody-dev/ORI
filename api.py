@@ -416,6 +416,27 @@ def create_app(node, lifespan=None):
             raise HTTPException(status_code=400, detail=reason)
         return {"status": "accepted", "height": height}
 
+    # ─────────────────────────────────────────────────────────────
+    # Static web explorer (served same-origin, no CORS needed)
+    # ─────────────────────────────────────────────────────────────
+
+    import os
+
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    if os.path.isdir(static_dir):
+        from fastapi.staticfiles import StaticFiles
+        from starlette.responses import FileResponse
+
+        index_path = os.path.join(static_dir, "index.html")
+
+        @app.get("/explorer", include_in_schema=False)
+        def explorer():
+            if not os.path.exists(index_path):
+                raise HTTPException(status_code=404, detail="explorer not found")
+            return FileResponse(index_path)
+
+        app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")
+
     return app
 
 

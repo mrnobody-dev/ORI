@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORI Explorer</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131a24; --panel2:#0f1520; --line:#1f2a3a;
+    --text:#d7e0ee; --muted:#7f8ea3; --accent:#f7931a; --green:#2fbf71; --red:#e5533d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{background:var(--bg); color:var(--text); font:14px/1.45 "Segoe UI", system-ui, sans-serif}
+  a{color:var(--accent); text-decoration:none} a:hover{text-decoration:underline}
+  .mono{font-family:"Cascadia Code", Consolas, monospace; word-break:break-all}
+  header{display:flex; align-items:center; gap:18px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--panel)}
+  .logo{font-size:20px; font-weight:700; letter-spacing:.5px}
+  .logo b{color:var(--accent)}
+  nav{display:flex; gap:4px; flex:1; flex-wrap:wrap}
+  nav a{padding:6px 12px; border-radius:6px; color:var(--text)}
+  nav a:hover{background:var(--panel2); text-decoration:none}
+  nav a.active{background:var(--accent); color:#10131a; font-weight:600}
+  #search{display:flex; gap:8px}
+  #q{width:300px; max-width:34vw; background:var(--panel2); border:1px solid var(--line); color:var(--text); padding:8px 12px; border-radius:6px; outline:none}
+  #q:focus{border-color:var(--accent)}
+  button{background:var(--accent); color:#10131a; border:0; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600}
+  button:disabled{opacity:.5; cursor:default}
+  main{max-width:1100px; margin:0 auto; padding:22px}
+  #banner{display:none; background:var(--red); color:#fff; padding:10px 16px; border-radius:8px; margin-bottom:16px}
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:18px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px}
+  .card .k{color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.6px}
+  .card .v{font-size:20px; font-weight:700; margin-top:6px}
+  .card .s{color:var(--muted); font-size:12px; margin-top:2px}
+  .bar{height:8px; background:var(--panel2); border-radius:4px; overflow:hidden; margin-top:8px}
+  .bar i{display:block; height:100%; background:linear-gradient(90deg,var(--accent),#ffd27f)}
+  table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  th{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); background:var(--panel2)}
+  td{padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  tr:hover td{background:rgba(247,147,26,.05)}
+  h2{font-size:18px; margin:18px 0 10px}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px}
+  .kv{display:grid; grid-template-columns:220px 1fr; gap:6px 14px}
+  .kv .k{color:var(--muted)}
+  .kv .k,.kv .v{padding:4px 0}
+  .pager{display:flex; gap:10px; justify-content:space-between; margin-top:12px}
+  .pill{display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600}
+  .pill.ok{background:rgba(47,191,113,.15); color:var(--green)}
+  .pill.no{background:rgba(229,83,61,.15); color:var(--red)}
+  .muted{color:var(--muted)}
+  .dim{opacity:.75}
+  .right{text-align:right}
+  .badge{display:inline-block; background:var(--panel2); border:1px solid var(--line); border-radius:4px; padding:1px 6px; font-size:11px; color:var(--muted)}
+  details.raw{margin-top:12px}
+  summary{cursor:pointer; color:var(--muted)}
+  textarea{width:100%; height:110px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px; font-family:Consolas,monospace; font-size:12px; resize:vertical; margin-top:8px}
+  #sub{min-height:340px}
+  .loading{color:var(--muted); padding:30px; text-align:center}
+  @media(max-width:700px){ .kv{grid-template-columns:120px 1fr} #q{width:150px} header{flex-wrap:wrap} }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">ORI <b>&#9671; Explorer</b></div>
+  <nav id="nav">
+    <a href="#/" data-nav="overview">Overview</a>
+    <a href="#/blocks" data-nav="blocks">Blocks</a>
+    <a href="#/mempool" data-nav="mempool">Mempool</a>
+    <a href="#/peers" data-nav="peers">Peers</a>
+  </nav>
+  <div id="search">
+    <input id="q" placeholder="Search txid, address, height, or hash" spellcheck="false">
+    <button onclick="doSearch()">Search</button>
+  </div>
+</header>
+<main>
+  <div id="banner"></div>
+  <div id="sub"><div class="loading">Loading…</div></div>
+</main>
+<script>
+"use strict";
+const API = new URLSearchParams(location.search).get("node") || "";
+const COIN = 1e8;
+let state = { tip: 0, auto: null };
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtOri = sats => (Number(sats)/COIN).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:8}) + " ORI";
+const fmtShortOri = sats => {
+  const o = Number(sats)/COIN;
+  if (o >= 1e9) return (o/1e9).toFixed(2)+"B ORI";
+  if (o >= 1e6) return (o/1e6).toFixed(2)+"M ORI";
+  if (o >= 1e3) return (o/1e3).toFixed(2)+"K ORI";
+  return o.toFixed(2)+" ORI";
+};
+const age = ts => {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s/60) + "m ago";
+  if (s < 86400) return Math.floor(s/3600) + "h " + Math.floor(s%3600/60) + "m ago";
+  return Math.floor(s/86400) + "d ago";
+};
+const when = ts => ts ? new Date(ts*1000).toISOString().replace("T"," ").slice(0,19) + " UTC" : "—";
+const shortHash = h => h ? h.slice(0,16) + "…" + h.slice(-8) : "—";
+
+async function api(path){
+  const r = await fetch(API + path, {headers:{"Accept":"application/json"}});
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+function fail(e){
+  $("#banner").style.display = "block";
+  $("#banner").textContent = "Cannot reach node API: " + e.message + (API ? "" : " (served from the node itself — check your HTTPS domain)");
+}
+
+function navActive(){
+  const cur = location.hash.split("?")[0] || "#/";
+  document.querySelectorAll("#nav a").forEach(a =>
+    a.classList.toggle("active", a.dataset.nav === cur.slice(2)));
+}
+
+async function loadOverview(){
+  const [info, supply, blocks] = await Promise.all([
+    api("/info/"), api("/supply/"), api("/blockchain/?start=0&limit=15")
+  ]);
+  state.tip = info.height;
+  const rows = (blocks.chain || []).slice().sort((a,b) => b.height - a.height);
+  const supplyPct = Math.min(100, supply.circulating_sats / supply.max_supply_sats * 100);
+  $("#sub").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="k">Height</div><div class="v">${info.height.toLocaleString()}</div><div class="s">best ${shortHash(info.best_hash)}</div></div>
+      <div class="card"><div class="k">Difficulty</div><div class="v">${(+info.difficulty).toFixed(2)}</div><div class="s">total work ${fmtShortWork(info.total_work)}</div></div>
+      <div class="card"><div class="k">Circulating</div><div class="v">${fmtShortOri(supply.circulating_sats)}</div><div class="s">of ${fmtShortOri(supply.max_supply_sats)} max</div><div class="bar"><i style="width:${supplyPct}%"></i></div></div>
+      <div class="card"><div class="k">Block reward</div><div class="v">${(supply.current_block_reward_sats/COIN).toFixed(2)} ORI</div><div class="s">halving in ${supply.blocks_until_halving.toLocaleString()} blocks</div></div>
+      <div class="card"><div class="k">Mempool</div><div class="v">${info.mempool_txs.toLocaleString()}</div><div class="s">pending txs</div></div>
+      <div class="card"><div class="k">Peers</div><div class="v">${info.peers}</div><div class="s">connected nodes</div></div>
+      <div class="card"><div class="k">Block time</div><div class="v">${info.block_time_seconds}s</div><div class="s">target ${info.block_time_target}s</div></div>
+    </div>
+    <h2>Latest blocks</h2>
+    <table>
+      <tr><th>Height</th><th>Age</th><th>Txs</th><th>Size</th><th>Hash</th><th class="right">Miner reward</th></tr>
+      ${rows.map(b => `<tr><td><a href="#/block/${b.height}">${b.height}</a></td><td class="muted">${age(b.timestamp)}</td><td>${b.tx_count}</td><td class="muted">${b.size} B</td><td class="mono"><a href="#/block/${b.height}">${shortHash(b.hash)}</a></td><td class="right mono">${fmtOri(rewardAt(b.height))}</td></tr>`).join("")}
+    </table>`;
+}
+function fmtShortWork(w){
+  const n = Number(BigInt(w || 0));
+  if (n >= 1e15) return (n/1e15).toFixed(1)+"P";
+  if (n >= 1e12) return (n/1e12).toFixed(1)+"T";
+  return n.toLocaleString();
+}
+function rewardAt(height){
+  const base = 4628000000, halving = 210000;
+  return base >> Math.min(63, Math.floor(height / halving));
+}
+
+async function loadBlocks(start){
+  start = Math.max(0, +start || 0);
+  const d = await api("/blockchain/?start=" + start + "&limit=25");
+  const rows = (d.chain || []).slice().sort((a,b) => b.height - a.height);
+  const tip = d.tip;
+  $("#sub").innerHTML = `
+    <h2>Blocks <span class="muted">(tip ${tip.toLocaleString()})</span></h2>
+    <table>
+      <tr><th>Height</th><th>Age</th><th>Time (UTC)</th><th>Txs</th><th>Size</th><th>Hash</th></tr>
+      ${rows.map(b => `<tr><td><a href="#/block/${b.height}">${b.height}</a></td><td class="muted">${age(b.timestamp)}</td><td class="muted">${when(b.timestamp).slice(11,19)}</td><td>${b.tx_count}</td><td class="muted">${b.size} B</td><td class="mono"><a href="#/block/${b.height}">${shortHash(b.hash)}</a></td></tr>`).join("")}
+    </table>
+    <div class="pager">
+      <button ${start === 0 ? "disabled" : ""} onclick="loadBlocks(${start - 25})">&#8592; Newer</button>
+      <button ${tip - start < 25 ? "disabled" : ""} onclick="loadBlocks(${start + 25})">Older &#8594;</button>
+    </div>`;
+}
+
+async function loadBlock(height){
+  const b = await api("/block/" + height);
+  let txs = [];
+  try { txs = (await api("/block/" + height + "/txs")).txs || []; } catch(e) {}
+  $("#sub").innerHTML = `
+    <h2>Block <span class="mono">#${b.height}</span></h2>
+    <div class="panel kv">
+      <div class="k">Hash</div><div class="v mono">${esc(b.hash)}</div>
+      <div class="k">Previous hash</div><div class="v mono"><a href="#/block/${b.height - 1}">${esc(b.prev_hash)}</a></div>
+      <div class="k">Merkle root</div><div class="v mono">${esc(b.merkle_root)}</div>
+      <div class="k">Timestamp</div><div class="v">${when(b.timestamp)} <span class="muted">(${age(b.timestamp)})</span></div>
+      <div class="k">Difficulty</div><div class="v">${(+b.difficulty).toFixed(2)}</div>
+      <div class="k">Bits / Nonce</div><div class="v mono">0x${b.bits.toString(16)} / ${b.nonce}</div>
+      <div class="k">Version</div><div class="v mono">0x${b.version.toString(16)}</div>
+      <div class="k">Size</div><div class="v">${b.size} bytes</div>
+      <div class="k">Transactions</div><div class="v">${b.tx_count}</div>
+    </div>
+    <h2>Transactions</h2>
+    <table>
+      <tr><th>#</th><th>Txid</th><th>Coinbase</th><th>In / Out</th><th class="right">Output value</th></tr>
+      ${txs.map(t => `<tr><td>${t.position}</td><td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td><td>${t.coinbase ? '<span class="pill ok">coinbase</span>' : ""}</td><td>${t.inputs} / ${t.outputs}</td><td class="right mono">${fmtOri(t.output_value)}</td></tr>`).join("")}
+    </table>`;
+}
+
+async function loadTx(txid){
+  const t = await api("/tx/" + txid);
+  const inp = t.inputs || [], out = t.outputs || [];
+  const inVal = inp.reduce((s,x) => s + (x.value || 0), 0);
+  const outVal = out.reduce((s,x) => s + (x.value || 0), 0);
+  $("#sub").innerHTML = `
+    <h2>Transaction <span class="mono">${esc(t.txid)}</span></h2>
+    <div class="panel kv">
+      <div class="k">Status</div><div class="v">${t.mempool ? '<span class="pill no">unconfirmed (mempool)</span>' : '<span class="pill ok">confirmed</span>'} ${t.deleted ? '<span class="pill no">deleted</span>' : ""}</div>
+      <div class="k">Confirmations</div><div class="v">${t.confirmations ?? 0}</div>
+      <div class="k">Block</div><div class="v">${t.mempool ? "—" : `<a href="#/block/${t.height}">#${t.height}</a> <span class="mono muted">(${shortHash(t.block_hash)})</span>`}</div>
+      <div class="k">Size</div><div class="v">${t.size} bytes</div>
+      <div class="k">Fee</div><div class="v">${inVal ? fmtOri(inVal - outVal) : "—"}</div>
+      <div class="k">Total in / out</div><div class="v mono">${fmtOri(inVal)} / ${fmtOri(outVal)}</div>
+    </div>
+    <h2>Inputs (${inp.length})</h2>
+    <table>
+      <tr><th>Address</th><th>Value</th><th>Previous output</th></tr>
+      ${inp.map(x => x.coinbase
+        ? `<tr><td colspan="3" class="muted">Coinbase — new generated coin</td></tr>`
+        : `<tr><td class="mono"><a href="#/address/${esc(x.address)}">${esc(x.address)}</a></td><td class="mono">${x.value != null ? fmtOri(x.value) : "—"}</td><td class="mono"><a href="#/tx/${x.prev_txid}">${shortHash(x.prev_txid)}</a>:${x.prev_vout}</td></tr>`).join("")}
+    </table>
+    <h2>Outputs (${out.length})</h2>
+    <table>
+      <tr><th>Address</th><th class="right">Value</th><th>Spent</th></tr>
+      ${out.map(x => `<tr><td class="mono"><a href="#/address/${esc(x.address)}">${esc(x.address)}</a></td><td class="right mono">${fmtOri(x.value)}</td><td>${x.spent ? '<span class="pill no">spent</span>' : '<span class="pill ok">unspent</span>'}</td></tr>`).join("")}
+    </table>
+    <details class="raw"><summary>Raw transaction hex</summary><textarea readonly>${esc(t.raw_hex || "")}</textarea></details>`;
+}
+
+async function loadAddress(addr){
+  const a = await api("/address/" + addr);
+  $("#sub").innerHTML = `
+    <h2>Address <span class="mono">${esc(addr)}</span></h2>
+    <div class="cards">
+      <div class="card"><div class="k">Balance</div><div class="v">${fmtOri(a.balance_sats)}</div><div class="s">${a.utxos.length} UTXOs</div></div>
+      <div class="card"><div class="k">Immature</div><div class="v">${fmtOri(a.immature_sats)}</div><div class="s">waiting ${a.coinbase_maturity} blocks</div></div>
+    </div>
+    <h2>UTXOs</h2>
+    <table>
+      <tr><th>Txid</th><th>Vout</th><th>Height</th><th class="right">Value</th></tr>
+      ${a.utxos.map(u => `<tr><td class="mono"><a href="#/tx/${u.txid}">${shortHash(u.txid)}</a></td><td>${u.vout}</td><td>${u.height ?? "—"}</td><td class="right mono">${fmtOri(u.value)}</td></tr>`).join("")}
+    </table>`;
+}
+
+async function loadMempool(){
+  const txs = await api("/mempool/");
+  $("#sub").innerHTML = `
+    <h2>Mempool <span class="muted">(${txs.length} txs)</span></h2>
+    ${txs.length ? `<table>
+      <tr><th>Txid</th><th>Size</th><th class="right">Fee</th><th class="right">Fee rate</th><th>RBF</th></tr>
+      ${txs.map(t => `<tr><td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td><td>${t.size} B</td><td class="right mono">${fmtOri(t.fee)}</td><td class="right mono">${t.fee_rate} sat/vB</td><td>${t.rbf ? '<span class="pill ok">yes</span>' : ""}</td></tr>`).join("")}
+    </table>` : '<p class="muted">Mempool is empty.</p>'}`;
+}
+
+async function loadPeers(){
+  const p = await api("/peers/");
+  $("#sub").innerHTML = `
+    <h2>Peers <span class="muted">(${p.count} connected, ${p.known.length} known)</span></h2>
+    <table>
+      <tr><th>Direction</th><th>Address</th><th>Height</th><th>User agent</th><th>Best hash</th><th>Last seen</th></tr>
+      ${p.peers.map(x => `<tr><td>${x.outbound ? "&#8594; outbound" : "&#8592; inbound"}</td><td class="mono">${esc(x.host)}:${x.port}</td><td>${x.height >= 0 ? x.height : "—"}</td><td class="mono">${esc(x.user_agent)}</td><td class="mono muted">${x.best_hash ? shortHash(x.best_hash) : "—"}</td><td class="muted">${x.last_seen_age_s != null ? x.last_seen_age_s + "s" : "—"}</td></tr>`).join("")}
+    </table>`;
+}
+
+function doSearch(){
+  const q = $("#q").value.trim();
+  if (!q) return;
+  if (/^[0-9a-f]{64}$/i.test(q)) location.hash = "#/tx/" + q;
+  else if (/^ori1[0-9a-z]{20,}$/i.test(q)) location.hash = "#/address/" + q;
+  else if (/^\d+$/.test(q)) location.hash = "#/block/" + q;
+  else location.hash = "#/tx/" + q;
+}
+
+const routes = {
+  "": loadOverview,
+  "/overview": loadOverview,
+  "/blocks": () => loadBlocks(0),
+  "/mempool": loadMempool,
+  "/peers": loadPeers,
+};
+
+function router(){
+  navActive();
+  clearInterval(state.auto); state.auto = null;
+  const [path, query] = location.hash.slice(1).split("?");
+  const parts = path.split("/").filter(Boolean);
+  const params = new URLSearchParams(query || "");
+  const run = async (fn) => {
+    try { await fn(); } catch(e) { fail(e); }
+  };
+  if (parts[0] === "block" && parts[1]) run(() => loadBlock(parts[1]));
+  else if (parts[0] === "tx" && parts[1]) run(() => loadTx(parts[1]));
+  else if (parts[0] === "address" && parts[1]) run(() => loadAddress(parts[1]));
+  else if (parts[0] === "blocks" && parts[1] != null) run(() => loadBlocks(parts[1]));
+  else run(() => routes[parts[0] || ""] ? routes[parts[0] || ""](params) : loadOverview());
+  if (!parts[0]) {
+    state.auto = setInterval(() => { try { loadOverview().catch(fail); } catch(e) {} }, 5000);
+  }
+}
+window.addEventListener("hashchange", router);
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+router();
+</script>
+</body>
+</html>
