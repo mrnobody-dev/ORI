@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements-node.txt .
+RUN pip install --no-cache-dir -r requirements-node.txt
+
+COPY . .
+
+# Seeder hanya butuh UDP DNS (5353) + HTTP (8123) + P2P scan (8353).
+# Railway tidak mengekspos UDP publik -> deploy image ini di VPS/home yang punya IP publik.
+EXPOSE 5353/udp 8123 8353
+
+CMD ["python", "seeder.py"]
