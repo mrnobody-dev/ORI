@@ -9,6 +9,16 @@ from utils import log_info, now
 CMD_SIZE = 12
 
 
+def _is_cgnat(host: str) -> bool:
+    try:
+        import ipaddress
+
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.version == 4 and (int(ip) & 0xFFC00000) == 0x64400000
+
+
 class Peer(threading.Thread):
     def __init__(self, network, sock, addr, outbound: bool):
         super().__init__(daemon=True)
@@ -189,16 +199,21 @@ class Network:
         self._running = True
         for host, port in self.cfg.seed_peers:
             self.connect(host, int(port))
-        with self._lock:
-            known = list(self.known)
-        for host, port in known:
-            if len(self.peers) >= self.cfg.max_peers:
-                break
-            self.connect(host, int(port))
+        threading.Thread(target=self._connect_known, daemon=True).start()
         self._listener = threading.Thread(target=self._accept_loop, daemon=True)
         self._listener.start()
         self._reconnect_loop = threading.Thread(target=self._reconnect_seeds, daemon=True)
         self._reconnect_loop.start()
+
+    def _connect_known(self):
+        with self._lock:
+            known = list(self.known)
+        for host, port in known:
+            if not self._running:
+                return
+            if len(self.peers) >= self.cfg.max_peers:
+                break
+            self.connect(host, int(port))
 
     def _save_peers(self):
         import json
@@ -219,10 +234,7 @@ class Network:
             for host, port in targets:
                 if len(self.peers) >= self.cfg.max_peers:
                     break
-                try:
-                    self.connect(host, int(port))
-                except Exception:
-                    pass
+                threading.Thread(target=self.connect, args=(host, port), daemon=True).start()
 
     def stop(self):
         self._running = False
@@ -317,6 +329,7 @@ class Network:
             return [{"host": h, "port": p} for h, p in self.known]
 
     def learn_peers(self, peers: list):
+        fresh = []
         for p in peers:
             host, port = p.get("host"), int(p.get("port", 0))
             if not host or not 0 < port < 65536:
@@ -328,11 +341,15 @@ class Network:
                 "::1",
             ):
                 continue
+            if _is_cgnat(host):
+                continue
             with self._lock:
                 if (host, port) in self.known:
                     continue
                 self.known.add((host, port))
-            self.connect(host, port)
+                fresh.append((host, port))
+        for host, port in fresh[:8]:
+            threading.Thread(target=self.connect, args=(host, port), daemon=True).start()
 
     def broadcast(self, command: str, payload: bytes, exclude=None):
         with self._lock:
