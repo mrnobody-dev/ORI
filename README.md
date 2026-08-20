@@ -1,4 +1,4 @@
-# ORI — speed-chosen blockchain (Python 3 + FastAPI)
+# ORI
 
 ORI blockchain: a Bitcoin-style full node with a UTXO model, ECDSA secp256k1,
 proof-of-work Py-ORI (SHA-256d, CPU-friendly), **ORI-Shield** difficulty
