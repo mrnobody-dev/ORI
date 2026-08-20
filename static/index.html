@@ -26,8 +26,6 @@ nav a:hover{background:rgba(255,255,255,.15)}
 nav a.active{background:rgba(255,255,255,.25)}
 #qwrap{margin-left:auto;display:flex;gap:8px;align-items:center}
 #q{width:280px;padding:8px 12px;border:none;border-radius:8px;font-size:13px;outline:none}
-#node{background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px}
-#node option{color:#212121}
 #banner{display:none;background:#FDECEA;color:#C62828;padding:10px 20px;border-bottom:1px solid #F5C6CB;font-weight:600}
 main{padding:20px;max-width:1100px;margin:0 auto}
 h2{font-size:15px;margin:22px 0 10px;color:var(--accent-dark)}
@@ -77,7 +75,6 @@ footer a{color:var(--accent-dark)}
   </nav>
   <div id="qwrap">
     <input id="q" type="text" placeholder="Search block height, hash, txid, or address" autocomplete="off">
-    <select id="node"><option value="">node (auto)</option></select>
   </div>
 </header>
 <div id="banner"></div>
@@ -136,7 +133,7 @@ function navActive(){
 }
 function scheduleAuto(fn, ms){
   if (state.timer) clearTimeout(state.timer);
-  state.timer = setTimeout(fn, ms);
+  state.timer = setTimeout(() => { state.timer = null; fn(); }, ms);
 }
 
 /* ── Home ─────────────────────────────────────────────── */
@@ -182,6 +179,7 @@ async function loadBlocks(start){
   const info = await api("/info/");
   let s = parsed;
   if (!start && !location.hash.includes("start=")) s = Math.max(0, info.height - 24);
+  s = Math.min(s, Math.max(0, info.height - 24));
   const d = await api("/blockchain/?start=" + s + "&limit=25");
   const rows = (d.chain || []).slice().sort((a,b) => b.height - a.height);
   const newest = s + 25 >= d.tip;
@@ -207,7 +205,7 @@ async function loadBlock(height){
     <div class="detail">
       <div class="row"><div class="k">Height</div><div class="v">${b.height}</div></div>
       <div class="row"><div class="k">Hash</div><div class="v mono">${b.hash}</div></div>
-      <div class="row"><div class="k">Previous hash</div><div class="v mono"><a href="#/block/${b.height-1}">${b.prev_hash}</a></div></div>
+      <div class="row"><div class="k">Previous hash</div><div class="v mono">${b.height > 0 ? `<a href="#/block/${b.height-1}">${b.prev_hash}</a>` : b.prev_hash}</div></div>
       <div class="row"><div class="k">Merkle root</div><div class="v mono">${b.merkle_root}</div></div>
       <div class="row"><div class="k">Timestamp</div><div class="v">${fmtTime(b.timestamp)} UTC (${age(b.timestamp)})</div></div>
       <div class="row"><div class="k">Difficulty</div><div class="v">${isFinite(diff) ? diff.toFixed(2) : "n/a"}</div></div>
@@ -259,8 +257,8 @@ async function loadTx(txid){
 async function loadAddress(addr){
   const d = await api("/address/" + addr);
   const u = d.utxos || [];
-  const mature = u.filter(x => !x.immature);
-  const immature = u.filter(x => x.immature);
+  const mature = u.filter(x => x.mature);
+  const immature = u.filter(x => !x.mature);
   const bal = mature.reduce((a,x) => a + x.value, 0);
   const imm = immature.reduce((a,x) => a + x.value, 0);
   const txids = [...new Set(u.map(x => x.txid).filter(Boolean))];
@@ -276,7 +274,7 @@ async function loadAddress(addr){
     <h2>UTXOs</h2>
     <table>
       <tr><th>Txid</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
-      ${u.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="right mono">${x.vout}</td><td class="right mono">${fmtOri(x.value)}</td><td>${x.immature ? '<span class="badge badge-pending">immature</span>' : '<span class="badge badge-green">spendable</span>'}</td></tr>`).join("")}
+      ${u.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="right mono">${x.vout}</td><td class="right mono">${fmtOri(x.value)}</td><td>${x.mature ? '<span class="badge badge-green">spendable</span>' : '<span class="badge badge-pending">immature</span>'}</td></tr>`).join("")}
     </table>`;
 }
 
@@ -314,6 +312,7 @@ async function loadMempool(){
 
 /* ── Router ──────────────────────────────────────────── */
 async function router(){
+  if (state.timer) { clearTimeout(state.timer); state.timer = null; }
   navActive();
   const [route, qs] = (location.hash || "#/").slice(1).split("?");
   const params = new URLSearchParams(qs || "");
@@ -343,14 +342,13 @@ async function doSearch(){
     if (/^[0-9a-f]{64}$/i.test(q)) {
       try {
         const r = await fetch(base + "/tx/" + q, {headers:{"Accept":"application/json"}});
-        return location.hash = "#/tx/" + q;
-      } catch (e) {
-        try {
-          const r = await fetch(base + "/block/hash/" + q, {headers:{"Accept":"application/json"}});
-          const b = await r.json();
-          if (b.height != null) return location.hash = "#/block/" + b.height;
-        } catch (e2) {}
-      }
+        if (r.ok) return location.hash = "#/tx/" + q;
+      } catch (e) {}
+      try {
+        const r = await fetch(base + "/block/hash/" + q, {headers:{"Accept":"application/json"}});
+        const b = await r.json();
+        if (r.ok && b.height != null) return location.hash = "#/block/" + b.height;
+      } catch (e2) {}
     }
     $("#banner").style.display = "block";
     $("#banner").textContent = "No match for: " + q;
