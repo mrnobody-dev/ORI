@@ -5,6 +5,8 @@ import threading
 import time
 
 from utils import log_info, now
+from block import Block, BlockHeader
+from pow import hash_meets_target
 
 CMD_SIZE = 12
 
@@ -83,7 +85,12 @@ class Peer(threading.Thread):
             if self.height > node.chain.storage.height() or (
                 self.peer_best and self.peer_best != node.chain.tip()["hash"]
             ):
-                self.network.request_blocks_from(self)
+                # Fast sync: headers-first if significantly behind
+                local_height = node.chain.storage.height()
+                if self.height - local_height > 10:
+                    self.network.request_headers_from(self)
+                else:
+                    self.network.request_blocks_from(self)
         elif cmd == "verack":
             self.network.node.on_peer_ready(self)
         elif cmd == "addr":
@@ -92,6 +99,9 @@ class Peer(threading.Thread):
         elif cmd == "getblocks":
             data = json.loads(payload)
             self.network.reply_blocks(self, data.get("from"), data.get("stop"))
+        elif cmd == "getheaders":
+            data = json.loads(payload)
+            self.network.reply_headers(self, data.get("from"), data.get("stop"), data.get("count", 2000))
         elif cmd == "getdata":
             data = json.loads(payload)
             for item in data.get("items", []):
@@ -112,6 +122,9 @@ class Peer(threading.Thread):
         elif cmd == "block":
             data = json.loads(payload)
             self.network.node.on_peer_block_hex(data.get("block", ""), self)
+        elif cmd == "headers":
+            data = json.loads(payload)
+            self.network.on_peer_headers(self, data.get("headers", []))
         elif cmd == "tx":
             data = json.loads(payload)
             self.network.node.on_peer_tx_hex(data.get("tx", ""), self)
@@ -371,6 +384,16 @@ class Network:
         }
         peer.send("getblocks", json.dumps(data).encode())
 
+    def request_headers_from(self, peer: Peer, from_hash: str = None):
+        """Request headers-first sync (Satoshi-style fast sync)."""
+        node = self.node
+        data = {
+            "from": from_hash or node.chain.tip()["hash"],
+            "stop": "0" * 64,
+            "count": 2000,
+        }
+        peer.send("getheaders", json.dumps(data).encode())
+
     def request_block(self, peer: Peer, block_hash_hex: str):
         payload = json.dumps({"items": [{"type": "block", "hash": block_hash_hex}]})
         peer.send("getdata", payload.encode())
@@ -398,6 +421,62 @@ class Network:
         if not items:
             items = [{"type": "tx", "hash": "0"}]
         peer.send("inv", json.dumps({"items": items}).encode())
+
+    def reply_headers(self, peer: Peer, from_hash: str, stop_hash: str, count: int = 2000):
+        node = self.node
+        rows = node.storage.all_blocks()
+        headers = []
+        start = None
+        for i, row in enumerate(rows):
+            if row["hash"] == from_hash:
+                start = i + 1
+                break
+        if start is None:
+            start = 1
+        for row in rows[start : start + count]:
+            if stop_hash and stop_hash != "0" * 64 and row["hash"] == stop_hash:
+                break
+            block = Block.from_bytes(row["raw"])
+            headers.append(block.header.to_hex())
+        peer.send("headers", json.dumps({"headers": headers}).encode())
+
+    def on_peer_headers(self, peer: Peer, headers_hex: list):
+        """Process received headers — verify PoW chain, then request blocks in parallel."""
+        if not headers_hex:
+            return
+        node = self.node
+        prev_hash = None
+        valid_headers = []
+        for h_hex in headers_hex:
+            try:
+                header = BlockHeader.from_hex(h_hex)
+            except Exception:
+                break
+            if prev_hash is not None and header.prev_hash.hex() != prev_hash:
+                break
+            if not hash_meets_target(header.hash(), header.bits):
+                break
+            valid_headers.append((header.hash().hex(), header))
+            prev_hash = header.hash().hex()
+        
+        if not valid_headers:
+            return
+        
+        # Request blocks in parallel from multiple peers
+        self._request_blocks_parallel(valid_headers)
+
+    def _request_blocks_parallel(self, headers: list):
+        """Request blocks from multiple peers in parallel."""
+        with self._lock:
+            peers = list(self.peers.values())
+        if not peers:
+            return
+        
+        # Distribute blocks across peers (round-robin)
+        for i, (block_hash, header) in enumerate(headers):
+            peer = peers[i % len(peers)]
+            if peer._alive:
+                self.request_block(peer, block_hash)
 
     def reply_item(self, peer: Peer, item: dict):
         node = self.node

@@ -198,8 +198,12 @@ async function loadBlocks(start){
 
 /* ── Block detail ────────────────────────────────────── */
 async function loadBlock(height){
-  const b = await api("/block/" + height);
+  const [b, txsData] = await Promise.all([
+    api("/block/" + height),
+    api("/block/" + height + "/txs")
+  ]);
   const diff = isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits);
+  const txs = txsData.txs || [];
   $("#sub").innerHTML = `
     <h2>Block #${b.height}</h2>
     <div class="detail">
@@ -218,7 +222,7 @@ async function loadBlock(height){
     <h2>Transactions</h2>
     <table>
       <tr><th>Txid</th><th class="right">Output value</th></tr>
-      ${b.txs.map((txid, i) => `<tr><td class="mono"><a href="#/tx/${txid}">${i === 0 ? "&#9671; coinbase" : shortHash(txid)}</a></td><td class="right mono">${i === 0 ? fmtOri(rewardAt(b.height)) : "&ndash;"}</td></tr>`).join("")}
+      ${txs.map((t, i) => `<tr><td class="mono"><a href="#/tx/${t.txid}">${i === 0 ? "&#9671; coinbase" : shortHash(t.txid)}</a></td><td class="right mono">${fmtOri(t.output_value)}</td></tr>`).join("")}
     </table>`;
 }
 

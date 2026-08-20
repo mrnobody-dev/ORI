@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import secrets
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel
@@ -241,6 +242,7 @@ def create_app(node, lifespan=None):
                 "confirmations": confirmations,
                 "mempool": False,
                 "deleted": False,
+                "timestamp": entry.get("timestamp"),
                 "block": {
                     "height": entry["height"],
                     "hash": entry["block_hash"],
@@ -260,6 +262,7 @@ def create_app(node, lifespan=None):
                 "mempool": True,
                 "confirmations": 0,
                 "deleted": False,
+                "timestamp": getattr(pending, "timestamp", None) or getattr(pending, "entry_time", None) or int(time.time()),
                 "block": {"height": None, "hash": None, "position": None, "mempool": True},
                 **decode(pending, in_mempool=True),
             }

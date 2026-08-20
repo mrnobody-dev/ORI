@@ -608,6 +608,21 @@ class NodeController(QObject):
                 out.append(u)
         return out
 
+    def address_detail(self, address: str) -> dict:
+        """Return UTXOs and balance for a single address (used by AddressDetailDialog)."""
+        if not self.node:
+            return {"utxos": []}
+        mempool = self.node.mempool.to_json()
+        tip = self.node.storage.height()
+        confirmed = self.node.chain.utxos_of(address)
+        utxos = []
+        for u in apply_mempool_utxos(confirmed, mempool, address):
+            u = dict(u)
+            u["mempool"] = u.get("height", -1) < 0
+            u["confirmations"] = tip - u["height"] + 1 if u["height"] >= 0 else 0
+            utxos.append(u)
+        return {"utxos": utxos}
+
     def _spendable_utxos(self) -> list:
         """Confirmed spendable UTXOs merged with mempool change outputs."""
         mempool = self.node.mempool.to_json()

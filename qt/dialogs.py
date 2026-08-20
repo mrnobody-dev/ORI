@@ -2,8 +2,13 @@ import os
 import shutil
 import time as _time
 
+try:
+    import qrcode
+except Exception:
+    qrcode = None
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QTextCursor
+from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -191,6 +196,82 @@ def _format_eta(seconds: int) -> str:
         h = seconds // 3600
         m = (seconds % 3600) // 60
         return f"~{h}h {m}m" if m else f"~{h}h"
+
+
+class AddressDetailDialog(QDialog):
+    def __init__(self, controller, address: str, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+        self.address = address
+        self.setWindowTitle("Address Details")
+        self.setMinimumWidth(460)
+        self.setMinimumHeight(420)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # ── Address with QR ──────────────────────────────────────────
+        addr_group = QGroupBox("Address")
+        addr_layout = QVBoxLayout(addr_group)
+
+        self.addr_label = QLabel(address)
+        self.addr_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.addr_label.setFont(QFont("Consolas", 11))
+        self.addr_label.setWordWrap(True)
+        addr_layout.addWidget(self.addr_label)
+
+        # QR Code
+        self.qr_label = QLabel()
+        self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        addr_layout.addWidget(self.qr_label)
+        if qrcode:
+            try:
+                qr = qrcode.make(f"ori:{address}")
+                img = qr.convert("RGBA")
+                w, h = img.size
+                qimg = QImage(img.tobytes("raw", "RGBA"), w, h, QImage.Format.Format_RGBA8888)
+                pix = QPixmap.fromImage(qimg).scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.qr_label.setPixmap(pix)
+            except Exception:
+                self.qr_label.setText("QR generation failed")
+                self.qr_label.setObjectName("muted")
+        else:
+            self.qr_label.setText("QR code unavailable (install 'qrcode')")
+            self.qr_label.setObjectName("muted")
+
+        # Copy button
+        copy_btn = QPushButton("Copy address")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(address))
+        addr_layout.addWidget(copy_btn)
+
+        layout.addWidget(addr_group)
+
+        # ── Balance info ─────────────────────────────────────────────
+        bal_group = QGroupBox("Balance")
+        bal_layout = QFormLayout(bal_group)
+        bal_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        try:
+            d = controller.address_detail(address)
+            u = d.get("utxos", [])
+            mature = [x for x in u if x.get("mature")]
+            immature = [x for x in u if not x.get("mature")]
+            bal = sum(x["value"] for x in mature)
+            imm = sum(x["value"] for x in immature)
+            bal_layout.addRow("Balance:", QLabel(f"{format_ori(bal)}  ({bal:,} sats)"))
+            bal_layout.addRow("Immature:", QLabel(f"{format_ori(imm)}  ({imm:,} sats)"))
+            bal_layout.addRow("UTXOs:", QLabel(f"{len(u)}  ({len(immature)} immature)"))
+            bal_layout.addRow("Transactions:", QLabel(str(len(set(x["txid"] for x in u if x.get("txid"))))))
+        except Exception as exc:
+            err = QLabel(f"Error loading balance: {exc}")
+            err.setObjectName("negative")
+            bal_layout.addRow(err)
+
+        layout.addWidget(bal_group)
+
+        # ── Close ────────────────────────────────────────────────────
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
 
 
 class AboutDialog(QDialog):

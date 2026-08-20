@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from qt.controller import format_time
+from qt.dialogs import AddressDetailDialog
 from wallet import format_ori
 
 
@@ -73,6 +74,8 @@ class ReceivePage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         hv.addWidget(self.table)
+
+        self.table.cellDoubleClicked.connect(self._open_address_detail)
 
         root.addWidget(box)
         root.addWidget(self.addr_box)
@@ -157,3 +160,10 @@ class ReceivePage(QWidget):
             f"Payment request copied to clipboard:\n\n{uri}",
         )
         self.controller.refresh()
+
+    def _open_address_detail(self, row: int, col: int):
+        if col != 2:
+            return
+        item = self.table.item(row, 2)
+        if item and item.text():
+            AddressDetailDialog(self.controller, item.text(), self).exec()
