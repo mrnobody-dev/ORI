@@ -86,6 +86,15 @@ let state = { tip: 0, auto: null };
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const targetFromBits = bits => {
+  const exponent = (bits >>> 24) & 0xFF;
+  const mantissa = bits & 0x007FFFFF;
+  return exponent <= 3 ? mantissa >> (8 * (3 - exponent)) : mantissa << (8 * (exponent - 3));
+};
+const MAX_TARGET = 0x0000FFFF * (1 << 208);
+const diffFromBits = bits => {
+  try { return MAX_TARGET / targetFromBits(bits); } catch (e) { return NaN; }
+};
 const fmtOri = sats => (Number(sats)/COIN).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:8}) + " ORI";
 const fmtShortOri = sats => {
   const o = Number(sats)/COIN;
@@ -126,6 +135,8 @@ async function loadOverview(){
     api("/info/"), api("/supply/"), api("/blockchain/?start=0&limit=15")
   ]);
   state.tip = info.height;
+  state.reward = info.block_reward_sats;
+  state.halving = info.halving_interval;
   const rows = (blocks.chain || []).slice().sort((a,b) => b.height - a.height);
   const supplyPct = Math.min(100, supply.circulating_sats / supply.max_supply_sats * 100);
   $("#sub").innerHTML = `
@@ -151,7 +162,7 @@ function fmtShortWork(w){
   return n.toLocaleString();
 }
 function rewardAt(height){
-  const base = 4628000000, halving = 210000;
+  const base = state.reward || 4628000000, halving = state.halving || 2102400;
   return base >> Math.min(63, Math.floor(height / halving));
 }
 
@@ -183,7 +194,7 @@ async function loadBlock(height){
       <div class="k">Previous hash</div><div class="v mono"><a href="#/block/${b.height - 1}">${esc(b.prev_hash)}</a></div>
       <div class="k">Merkle root</div><div class="v mono">${esc(b.merkle_root)}</div>
       <div class="k">Timestamp</div><div class="v">${when(b.timestamp)} <span class="muted">(${age(b.timestamp)})</span></div>
-      <div class="k">Difficulty</div><div class="v">${(+b.difficulty).toFixed(2)}</div>
+      <div class="k">Difficulty</div><div class="v">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</div>
       <div class="k">Bits / Nonce</div><div class="v mono">0x${b.bits.toString(16)} / ${b.nonce}</div>
       <div class="k">Version</div><div class="v mono">0x${b.version.toString(16)}</div>
       <div class="k">Size</div><div class="v">${b.size} bytes</div>
