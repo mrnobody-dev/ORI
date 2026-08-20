@@ -1,0 +1,159 @@
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from qt.controller import format_time
+from wallet import format_ori
+
+
+class ReceivePage(QWidget):
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        box = QGroupBox("Request payment")
+        form = QFormLayout(box)
+        self.amount = QDoubleSpinBox()
+        self.amount.setDecimals(8)
+        self.amount.setMaximum(194_600_000)
+        self.label_edit = QLineEdit()
+        self.message = QLineEdit()
+        form.addRow("&Amount:", self.amount)
+        form.addRow("&Label:", self.label_edit)
+        form.addRow("&Message:", self.message)
+
+        self.addr_box = QGroupBox("Receiving address")
+        av = QVBoxLayout(self.addr_box)
+        self.address = QLineEdit()
+        self.address.setReadOnly(True)
+        self.address.setMinimumHeight(32)
+        font = self.address.font()
+        font.setFamily("Consolas")
+        font.setPointSize(11)
+        self.address.setFont(font)
+        row = QHBoxLayout()
+        self.btn_copy = QPushButton("Copy address")
+        self.btn_new = QPushButton("Create new receiving address")
+        self.btn_request = QPushButton("&Request payment")
+        self.btn_request.setObjectName("primaryButton")
+        row.addWidget(self.btn_copy)
+        row.addWidget(self.btn_new)
+        row.addStretch(1)
+        row.addWidget(self.btn_request)
+        av.addWidget(self.address)
+        av.addLayout(row)
+        hint = QLabel("Share this ori1… address to receive payments. Logo/QR can be added later.")
+        hint.setObjectName("muted")
+        av.addWidget(hint)
+
+        hist = QGroupBox("Requested payments history")
+        hv = QVBoxLayout(hist)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Date", "Label", "Address", "Amount"])
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        hv.addWidget(self.table)
+
+        root.addWidget(box)
+        root.addWidget(self.addr_box)
+        root.addWidget(hist, 1)
+
+        self.btn_copy.clicked.connect(self._copy)
+        self.btn_new.clicked.connect(self._new_addr)
+        self.btn_request.clicked.connect(self._request)
+
+    def apply_snapshot(self, snap: dict):
+        if not self.address.text():
+            self.address.setText(snap.get("default_address", ""))
+        self._fill_requests(snap.get("receive_requests", []))
+
+    def _fill_requests(self, rows: list):
+        self.table.setRowCount(len(rows))
+        for i, rec in enumerate(rows):
+            vals = [
+                format_time(rec.get("timestamp", 0)),
+                rec.get("label", ""),
+                rec.get("address", ""),
+                format_ori(rec.get("amount_sats", 0)) if rec.get("amount_sats") else "",
+            ]
+            for c, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                if c in (0, 3):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(i, c, item)
+
+    def _copy(self):
+        from PySide6.QtWidgets import QApplication
+
+        text = self.address.text().strip()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    def _new_addr(self):
+        name, info = self.controller.new_receiving_address(self.label_edit.text().strip())
+        self.address.setText(info["address"])
+        QMessageBox.information(
+            self,
+            "New receiving address",
+            f"A new receiving address was generated.\n\n{info['address']}\n({name})",
+        )
+
+    def _request(self):
+        import time
+
+        addr = self.address.text().strip()
+        if not addr:
+            QMessageBox.warning(self, "Request payment", "No receiving address.")
+            return
+        amount = self.amount.value()
+        sats = int(round(amount * 100_000_000)) if amount else 0
+        label = self.label_edit.text().strip()
+        if label:
+            self.controller.set_label(addr, label)
+        uri = f"ori:{addr}"
+        params = []
+        if amount:
+            params.append(f"amount={amount:.8f}".rstrip("0").rstrip("."))
+        if label:
+            params.append("label=" + label)
+        if self.message.text().strip():
+            params.append("message=" + self.message.text().strip())
+        if params:
+            uri += "?" + "&".join(params)
+        self.controller.add_receive_request({
+            "timestamp": int(time.time()),
+            "label": label,
+            "address": addr,
+            "amount_sats": sats,
+            "message": self.message.text().strip(),
+            "uri": uri,
+        })
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(uri)
+        QMessageBox.information(
+            self,
+            "Request payment",
+            f"Payment request copied to clipboard:\n\n{uri}",
+        )
+        self.controller.refresh()
