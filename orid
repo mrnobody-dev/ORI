@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""ORI daemon wrapper — Bitcoin-Core style CLI.
+
+Usage:
+    ./orid [-datadir=DATA] [-port=8000] [-p2pport=8033]
+           [-seed-peers=host:port,...] [-dnsseed-host=IP] [-dnsseed-port=5353]
+    python3 orid ...            (file dapat dipanggil juga dengan python3 orid)
+
+Flag -key=value / -key value (Bitcoin style). Semua opsi dikenal dipetakan
+ke env BTPY_*, lalu node dijalankan sebagai uvicorn (exec, satu proses).
+"""
+
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+FLAGS = {
+    "-datadir": "BTPY_DATA_DIR",
+    "-api-host": "BTPY_API_HOST",
+    "-port": "BTPY_API_PORT",
+    "-p2pport": "BTPY_P2P_PORT",
+    "-seed-peers": "BTPY_SEED_PEERS",
+    "-dnsseed-host": "BTPY_SEED_DNS_HOST",
+    "-dnsseed-name": "BTPY_SEED_DNS_NAME",
+    "-dnsseed-port": "BTPY_SEED_DNS_PORT",
+    "-dnsseed-p2pport": "BTPY_SEED_DNS_P2P_PORT",
+    "-enable-p2p": "BTPY_ENABLE_P2P",
+    "-initial-zeros": "BTPY_INITIAL_ZEROS",
+}
+
+USAGE = "usage: ./orid [-datadir=data] [-api-host=127.0.0.1] [-port=8000] [-p2pport=8033] [-seed-peers=h:p,...]"
+
+
+def main(argv):
+    args = list(argv)
+    env = dict(os.environ)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-h", "-help", "--help"):
+            print(USAGE, file=sys.stderr)
+            sys.exit(0)
+        key, eq, value = arg.partition("=")
+        if eq:
+            i += 1
+        elif key in FLAGS and i + 1 < len(args):
+            value = args[i + 1]
+            i += 2
+        else:
+            print(USAGE, file=sys.stderr)
+            sys.exit(1)
+        env_name = FLAGS.get(key)
+        if env_name is None:
+            print(f"orid: unknown option: {key}", file=sys.stderr)
+            sys.exit(1)
+        env[env_name] = value
+
+    host = env.get("BTPY_API_HOST", "127.0.0.1")
+    port = env.get("BTPY_API_PORT", "8000")
+    uvicorn = os.path.join(ROOT, ".venv", "bin", "uvicorn")
+    os.chdir(ROOT)
+    os.execve(
+        uvicorn,
+        [
+            uvicorn,
+            "main:app",
+            "--host",
+            host,
+            "--port",
+            port,
+            "--no-access-log",
+            "--log-level",
+            "warning",
+        ],
+        env,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

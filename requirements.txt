@@ -1,0 +1,4 @@
+fastapi>=0.111
+uvicorn>=0.30
+ecdsa>=0.19
+PySide6>=6.6
