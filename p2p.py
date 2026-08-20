@@ -90,7 +90,7 @@ class Peer(threading.Thread):
             data = json.loads(payload)
             wanted = []
             for item in data.get("items", []):
-                if len(self.requested) >= 100:
+                if len(self.requested) >= 1000:
                     break
                 key = (item.get("type"), item.get("hash"))
                 if self.network.node.knows(item) or key in self.requested:

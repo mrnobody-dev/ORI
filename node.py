@@ -286,7 +286,7 @@ class Node:
             peer.height = max(peer.height, height)
         if ok:
             self.network.broadcast_inv("block", block_hash, exclude=peer)
-        if height is not None and height < peer.height and not peer.requested:
+        if height is not None and height < peer.height and len(peer.requested) < 100:
             self.network.request_blocks_from(peer)
 
     def _revalidate_mempool(self):
