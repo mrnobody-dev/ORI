@@ -60,8 +60,8 @@ class Config:
     )
     min_relay_fee_per_vb: float = 0.28
     api_token: str = ""
-    assume_valid_block: str = ""
-    assume_valid_height: int = 0
+    assume_valid_block: str = "b26dfbdefdc0cdf399b0e458f3a1a24df847b77b063456957ffe83b007000000"
+    assume_valid_height: int = 1000
 
     @classmethod
     def from_env(cls) -> "Config":
