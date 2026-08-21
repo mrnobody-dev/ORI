@@ -61,3 +61,16 @@ def test_pending_tx_detail_dialog_constructs_without_rbf_crash(qt_app):
     dialog = TxDetailDialog(ControllerStub(), "11" * 32)
 
     assert dialog.bump_btn.text() == "Bump Fee (RBF)"
+
+
+def test_qt_peer_target_parser_rejects_rest_api_url():
+    from qt.controller import NodeController
+    from wallet import WalletError
+
+    assert NodeController.normalize_peer_target(object(), "nozomi.proxy.rlwy.net:32346", 8033) == (
+        "nozomi.proxy.rlwy.net",
+        32346,
+    )
+
+    with pytest.raises(WalletError, match="REST API URL"):
+        NodeController.normalize_peer_target(object(), "http://nozomi.proxy.rlwy.net:32346/", 8033)

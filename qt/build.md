@@ -191,6 +191,26 @@ Patch hardening QT 2026-08-21:
 - Test regresi baru: stale lock auto-recover dan konstruksi dialog detail tx
   pending/RBF di mode offscreen.
 
+Patch P2P/QT connectivity 2026-08-21:
+
+- Manual Add Node di QT sekarang menerima `host`, `host:port`, atau URL P2P
+  non-HTTP. URL `http://...` / `https://...` ditolak eksplisit karena itu REST
+  API endpoint, bukan endpoint P2P; memakai port API di dialog peers memang akan
+  terlihat connect sebentar lalu drop karena protokol framing berbeda.
+- Manual peer dengan hostname DNS seperti `nozomi.proxy.rlwy.net` sekarang
+  disimpan ke known peers dan ikut reconnect. Filtering addr-relay tetap ketat:
+  peer yang dipelajari dari jaringan masih wajib routable IP, supaya perbaikan
+  UX manual tidak membuka surface eclipse via relay hostname arbitrary.
+- Peer list QT menampilkan state `Connecting` vs `Ready`; `Ready` hanya setelah
+  `verack`, jadi UI tidak lagi menyamakan socket TCP mentah dengan koneksi P2P
+  valid.
+- Network menyimpan recent peer failures dan menampilkannya di Peers dialog,
+  misalnya `connect failed`, `bad magic`, `socket closed`, `ping timeout`, atau
+  `chain mismatch (genesis)`.
+- Sync download dipindah ke fase setelah handshake selesai dan `Node.on_peer_ready`
+  memakai headers-first untuk gap >10 blok. Smoke lokal dua node memverifikasi
+  node QT/GUI-compatible bisa sync dari height 0 ke height 12 lewat P2P.
+
 Skrip test ad-hoc dipakai: `qt_deep_test*.py` (temp di luar repo).
 
 ## 8. Tolok ukur (benchmark) ala Bitcoin Core

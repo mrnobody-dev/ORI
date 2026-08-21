@@ -657,7 +657,7 @@ class PeersDialog(QDialog):
         add = QHBoxLayout()
         add.addWidget(QLabel("Add node:"))
         self.host = QLineEdit()
-        self.host.setPlaceholderText("127.0.0.1")
+        self.host.setPlaceholderText("host, host:port, or p2p URL")
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(8033)
@@ -668,11 +668,11 @@ class PeersDialog(QDialog):
         add.addWidget(btn)
         layout.addLayout(add)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["Direction", "Address", "Port", "Height", "User agent", "Best hash"]
+            ["State", "Direction", "Address", "Port", "Height", "User agent", "Best hash"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -685,6 +685,10 @@ class PeersDialog(QDialog):
         self.known.setWordWrap(True)
         self.known.setObjectName("muted")
         kv.addWidget(self.known)
+        self.failures = QLabel("")
+        self.failures.setWordWrap(True)
+        self.failures.setObjectName("negative")
+        kv.addWidget(self.failures)
         layout.addWidget(known_box)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -696,6 +700,7 @@ class PeersDialog(QDialog):
         self.table.setRowCount(len(peers))
         for i, p in enumerate(peers):
             vals = [
+                "Ready" if p.get("ready") else "Connecting",
                 "→ Outbound" if p.get("outbound") else "← Inbound",
                 p.get("host", ""),
                 str(p.get("port", "")),
@@ -705,24 +710,34 @@ class PeersDialog(QDialog):
             ]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v)
-                if c == 5:
+                if c == 6:
                     item.setFont(QFont("Consolas", 8))
                 self.table.setItem(i, c, item)
         known = snap.get("known_peers") or []
         self.known.setText(
             ", ".join(f"{k['host']}:{k['port']}" for k in known) or "(none)"
         )
+        failures = snap.get("peer_failures") or []
+        if failures:
+            self.failures.setText(
+                "Recent failures: "
+                + "; ".join(f"{f.get('peer')}: {f.get('reason')}" for f in failures[-3:])
+            )
+        else:
+            self.failures.setText("")
 
     def _add(self):
         host = self.host.text().strip()
         if not host:
             return
         try:
-            self.controller.add_peer(host, int(self.port.value()))
+            host, port = self.controller.add_peer(host, int(self.port.value()))
         except WalletError as exc:
             QMessageBox.warning(self, "Peers", str(exc))
             return
-        QMessageBox.information(self, "Peers", f"Connecting to {host}:{self.port.value()}…")
+        self.host.setText(host)
+        self.port.setValue(port)
+        QMessageBox.information(self, "Peers", f"Connecting to {host}:{port}…")
 
 
 class AddressBookDialog(QDialog):

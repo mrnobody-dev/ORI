@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -247,18 +248,40 @@ class NodeController(QObject):
                 "host": p.addr[0],
                 "port": p.addr[1],
                 "outbound": p.outbound,
+                "ready": bool(getattr(p, "handshake_complete", False)),
+                "age_sec": max(0, int(time.time() - getattr(p, "connected_at", time.time()))),
                 "height": p.height,
                 "user_agent": p.ua,
                 "best_hash": p.peer_best or "",
             })
         return out
 
+    def normalize_peer_target(self, host: str, port: int) -> tuple[str, int]:
+        raw = (host or "").strip()
+        if not raw:
+            raise WalletError("peer host is required")
+        explicit_scheme = "://" in raw
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+        if explicit_scheme and parsed.scheme in ("http", "https"):
+            raise WalletError(
+                "that is a REST API URL, not a P2P address. "
+                "Use the node's P2P host:port instead."
+            )
+        clean_host = parsed.hostname or raw
+        clean_port = parsed.port or int(port)
+        clean_host = clean_host.strip("[]")
+        if not clean_host:
+            raise WalletError("peer host is required")
+        if not (0 < int(clean_port) < 65536):
+            raise WalletError("invalid port")
+        return clean_host, int(clean_port)
+
     def add_peer(self, host: str, port: int):
         if not self.node:
             raise WalletError("node not started")
-        if not (0 < port < 65536):
-            raise WalletError("invalid port")
+        host, port = self.normalize_peer_target(host, port)
         self.node.add_peer(host.strip(), int(port))
+        return host, int(port)
 
     def _balances(self) -> dict:
         node = self.node
@@ -333,6 +356,7 @@ class NodeController(QObject):
             "peers": len(peers),
             "peer_list": peers,
             "known_peers": node.network.known_peers(),
+            "peer_failures": node.network.recent_peer_failures(),
             "mempool": len(mempool),
             "mempool_txs": mempool,
             "balances": self._balances(),

@@ -52,3 +52,13 @@ def test_peer_lifecycle_is_debug_and_summary_info(tmp_path, monkeypatch):
     finally:
         sock_a.close()
         sock_b.close()
+
+
+def test_manual_dns_peer_is_retained_as_known_peer(tmp_path):
+    cfg = Config(data_dir=str(tmp_path), enable_p2p=False)
+    network = Network(cfg, node=None)
+
+    assert network.add_manual_peer("nozomi.proxy.rlwy.net", 32346) is True
+
+    assert {"host": "nozomi.proxy.rlwy.net", "port": 32346} in network.known_peers()
+    assert network._get_subnet("nozomi.proxy.rlwy.net") == "dns:nozomi.proxy.rlwy.net"

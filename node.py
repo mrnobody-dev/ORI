@@ -342,8 +342,12 @@ class Node:
             pass
 
     def on_peer_ready(self, peer):
-        if peer.height > self.chain.storage.height():
-            self.network.request_blocks_from(peer)
+        local_height = self.chain.storage.height()
+        if peer.height > local_height:
+            if peer.height - local_height > 10:
+                self.network.request_headers_from(peer)
+            else:
+                self.network.request_blocks_from(peer)
 
     def knows(self, item: dict) -> bool:
         kind = item.get("type")
@@ -365,7 +369,7 @@ class Node:
         return self.chain.template(coinbase_address, self.mempool)
 
     def add_peer(self, host: str, port: int):
-        self.network.learn_peers([{"host": host, "port": port}])
+        self.network.add_manual_peer(host, port)
         self.network.connect(host, port)
 
     def stats(self) -> dict:

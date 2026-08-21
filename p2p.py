@@ -4,7 +4,7 @@ import struct
 import threading
 import time
 import ipaddress
-from collections import defaultdict
+from collections import defaultdict, deque
 from utils import hexstr, now, logger, LogCategory
 from block import Block, BlockHeader
 from pow import hash_meets_target
@@ -83,9 +83,11 @@ class Peer(threading.Thread):
         self.best_hash = None
         self.ua = "unknown"
         self.peer_best = None
+        self.handshake_complete = False
         self.requested = set()
         self.pending_children = {}
         self.expected_headers_from = None
+        self.disconnect_reason = ""
         self._alive = True
         self._send_lock = threading.Lock()
         self.last_seen = now()
@@ -120,7 +122,7 @@ class Peer(threading.Thread):
             else:
                 return ipaddress.ip_network(f"{ip}/32", strict=False)
         except ValueError:
-            return None
+            return f"dns:{host.lower()}"
     
     def _consume_msg_tokens(self, payload_bytes: int) -> bool:
         """Token bucket rate limiting. Returns True if allowed."""
@@ -187,8 +189,16 @@ class Peer(threading.Thread):
             self.sock.settimeout(30)
             self.send_version()
             self._read_loop()
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self.disconnect_reason = str(exc) or exc.__class__.__name__
+            logger.warn(
+                LogCategory.P2P,
+                "Peer connection failed",
+                peer=_peer_label(self.addr),
+                outbound=self.outbound,
+                handshake_complete=self.handshake_complete,
+                reason=self.disconnect_reason,
+            )
         finally:
             self.close()
 
@@ -198,6 +208,7 @@ class Peer(threading.Thread):
                 msg = read_msg(self.sock, self.network.cfg.max_msg_bytes, self.network.cfg.network_magic)
             except socket.timeout:
                 if self._ping_sent_at and (now() - self._ping_sent_at) > 30:
+                    self.disconnect_reason = "ping timeout"
                     logger.warn(LogCategory.P2P, "Peer dead - no pong after ping",
                                peer=_peer_label(self.addr),
                                outbound=self.outbound)
@@ -214,14 +225,17 @@ class Peer(threading.Thread):
                 else:
                     self._add_ban_score("protocol_violation")
                 logger.warn(LogCategory.P2P, "Peer framing error", peer=_peer_label(self.addr), error=reason)
+                self.disconnect_reason = reason
                 break
             if msg is None:
+                self.disconnect_reason = "socket closed"
                 break
             cmd, payload = msg
             
             # Rate limiting: check token bucket
             if not self._consume_msg_tokens(len(payload)):
                 self._add_ban_score("protocol_violation")
+                self.disconnect_reason = "rate limit exceeded"
                 break
             
             # Track bytes received
@@ -243,6 +257,7 @@ class Peer(threading.Thread):
             node = self.network.node
             peer_genesis = data.get("genesis")
             if peer_genesis and peer_genesis != node.chain.genesis_hash():
+                self.disconnect_reason = "chain mismatch (genesis)"
                 raise ValueError("chain mismatch (genesis)")
             self.height = int(data.get("height", -1))
             self.peer_best = data.get("best_hash")
@@ -258,16 +273,8 @@ class Peer(threading.Thread):
             )
             self.send("verack", b"{}")
             self.send_addr()
-            if self.height > node.chain.storage.height() or (
-                self.peer_best and self.peer_best != node.chain.tip()["hash"]
-            ):
-                # Fast sync: headers-first if significantly behind
-                local_height = node.chain.storage.height()
-                if self.height - local_height > 10:
-                    self.network.request_headers_from(self)
-                else:
-                    self.network.request_blocks_from(self)
         elif cmd == "verack":
+            self.handshake_complete = True
             self.network.node.on_peer_ready(self)
         elif cmd == "addr":
             data = json.loads(payload)
@@ -427,10 +434,15 @@ class Peer(threading.Thread):
             pass
         if getattr(self, "link_established", False):
             duration_sec = max(0.0, now() - self.connected_at)
+            reason = self.disconnect_reason or "closed"
+            if reason != "closed":
+                self.network._record_peer_failure(_peer_label(self.addr), reason)
             logger.debug(LogCategory.P2P, "Peer disconnected",
                         peer=_peer_label(self.addr),
                         outbound=self.outbound,
-                        duration_sec=round(duration_sec, 3))
+                        duration_sec=round(duration_sec, 3),
+                        handshake_complete=self.handshake_complete,
+                        reason=reason)
             self.network._record_peer_event("disconnected", peer=self, duration_sec=duration_sec)
         self.network.drop(self)
 
@@ -464,6 +476,7 @@ class Network:
         # individually available at DEBUG. This keeps large deployments readable.
         self._peer_event_counts = defaultdict(int)
         self._peer_event_last_at = now()
+        self._peer_failures = deque(maxlen=20)
     
     def _load_banned_peers(self):
         import os
@@ -499,7 +512,7 @@ class Network:
             else:
                 return ipaddress.ip_network(f"{ip}/32", strict=False)
         except ValueError:
-            return None
+            return f"dns:{host.lower()}"
     
     def _is_banned(self, addr) -> bool:
         expiry = self._banned_peers.get(addr)
@@ -606,8 +619,17 @@ class Network:
             disconnected=counts.get("disconnected", 0),
             rejected=counts.get("rejected", 0),
             connect_failed=counts.get("connect_failed", 0),
+            recent_failures=list(self._peer_failures)[-3:],
             interval_sec=round(self._peer_log_interval(), 3),
         )
+
+    def _record_peer_failure(self, peer_label: str, reason: str):
+        with self._lock:
+            self._peer_failures.append({
+                "peer": peer_label,
+                "reason": reason,
+                "time": int(now()),
+            })
 
     def _connect_known(self):
         while self._running:
@@ -619,7 +641,7 @@ class Network:
             for host, port in known:
                 subnet = self._get_subnet(host)
                 if subnet:
-                    by_subnet[subnet].append((host, port))
+                    by_subnet[str(subnet)].append((host, port))
             
             # Try to connect to one peer per subnet, preferring high reputation
             for subnet, peers in by_subnet.items():
@@ -630,7 +652,7 @@ class Network:
                 
                 # Check outbound limit per subnet
                 outbound_in_subnet = sum(1 for p in self.peers.values() 
-                                         if p.outbound and p._subnet == subnet)
+                                         if p.outbound and str(p._subnet) == str(subnet))
                 if outbound_in_subnet >= self.cfg.p2p_max_outbound_per_subnet:
                     continue
                 
@@ -745,6 +767,7 @@ class Network:
         except OSError as exc:
             self._outbound.discard(key)
             logger.debug(LogCategory.P2P, "Outbound connect failed", peer=_peer_label(key), error=str(exc))
+            self._record_peer_failure(_peer_label(key), f"connect failed: {exc}")
             self._record_peer_event("connect_failed")
             return
         peer = Peer(self, sock, (host, port), outbound=True)
@@ -848,6 +871,21 @@ class Network:
         with self._lock:
             return [{"host": h, "port": p} for h, p in self.known]
 
+    def recent_peer_failures(self) -> list:
+        with self._lock:
+            return list(self._peer_failures)
+
+    def add_manual_peer(self, host: str, port: int):
+        host = str(host).strip()
+        port = int(port)
+        if not host or not 0 < port < 65536:
+            return False
+        with self._lock:
+            if self._is_banned((host, port)):
+                return False
+            self.known.add((host, port))
+        return True
+
     def learn_peers(self, peers: list):
         fresh = []
         for p in peers:
@@ -884,7 +922,7 @@ class Network:
 
     def broadcast(self, command: str, payload: bytes, exclude=None):
         with self._lock:
-            targets = list(self.peers.values())
+            targets = [p for p in self.peers.values() if p.handshake_complete]
         for peer in targets:
             if peer is exclude:
                 continue
@@ -1037,7 +1075,7 @@ class Network:
     def _request_blocks_parallel(self, headers: list):
         """Request blocks from multiple peers in parallel."""
         with self._lock:
-            peers = list(self.peers.values())
+            peers = [p for p in self.peers.values() if p.handshake_complete]
         if not peers:
             return
         
