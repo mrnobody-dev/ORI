@@ -169,6 +169,11 @@ Yang sudah DIVERIFIKASI offscreen (WSL, PySide6 6.11.1):
 
 Patch hardening QT 2026-08-21:
 
+- `ORICore.spec` sekarang mencantumkan hidden import eksplisit untuk semua modul
+  core root (`utils`, `tx`, `api`, `chain`, `p2p`, dll.) dan seluruh paket `qt`.
+  Ini memperbaiki crash frozen app `dist/ORICore/ORICore.exe` seperti
+  `ModuleNotFoundError: No module named 'utils'` saat PyInstaller gagal
+  menemukan import root dari dependency chain `qt.controller -> api -> tx`.
 - Startup lock data-dir sekarang memeriksa PID pemilik `.lock`. Jika PID masih
   hidup, GUI menolak start untuk mencegah dua node menulis chain DB yang sama;
   jika PID sudah mati/stale, lock otomatis dibersihkan sehingga crash lama tidak
