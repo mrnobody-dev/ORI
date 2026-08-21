@@ -92,14 +92,12 @@ class Mempool:
                 if key in self._inputs:
                     return False
             
-            # Compute ancestors and descendants
-            ancestors = self._get_ancestors_locked(txid)
-            descendants = self._get_descendants_locked(txid)
+            # Compute ancestry from the candidate transaction before insertion.
+            ancestors = self._get_ancestors_for_tx_locked(tx)
+            descendants = set()
             
             # Check ancestor/descendant count limits
-            if len(ancestors) >= MAX_ANCESTORS:
-                return False
-            if len(descendants) >= MAX_DESCENDANTS:
+            if len(ancestors) + 1 > MAX_ANCESTORS:
                 return False
             
             # Check ancestor/descendant size limits (including this tx)
@@ -109,8 +107,17 @@ class Mempool:
             
             if ancestor_size > MAX_ANCESTOR_SIZE:
                 return False
-            if descendant_size > MAX_DESCENDANT_SIZE:
-                return False
+            for ancestor in ancestors:
+                if len(self._descendants.get(ancestor, set())) + 1 > MAX_DESCENDANTS:
+                    return False
+                size_with_new = self._tx_sizes.get(ancestor, 0)
+                size_with_new += sum(
+                    self._tx_sizes.get(d, 0)
+                    for d in self._descendants.get(ancestor, set())
+                )
+                size_with_new += vsize
+                if size_with_new > MAX_DESCENDANT_SIZE:
+                    return False
             
             # Add to mempool
             self._txs[txid] = tx
@@ -131,6 +138,25 @@ class Mempool:
     def _tx_vsize(self, tx) -> int:
         """Virtual size of transaction."""
         return len(tx.serialize())
+
+    def _get_ancestors_for_tx_locked(self, tx) -> set:
+        """Get all mempool ancestors of a candidate tx before insertion."""
+        ancestors = set()
+        queue = deque()
+        for txin in tx.inputs:
+            if txin.prev_txid == b"\x00" * 32:
+                continue
+            if txin.prev_txid in self._txs:
+                queue.append(txin.prev_txid)
+        while queue:
+            cur = queue.popleft()
+            if cur in ancestors:
+                continue
+            ancestors.add(cur)
+            for parent in self._ancestors.get(cur, set()):
+                if parent not in ancestors:
+                    queue.append(parent)
+        return ancestors
     
     def _get_ancestors_locked(self, txid: bytes) -> set:
         """Get all ancestors of a tx in mempool (excluding itself)."""
@@ -278,6 +304,8 @@ class Mempool:
             if old_tx is None:
                 return False
             old_fee = self._fees.get(old_txid, 0)
+            if self._descendants.get(old_txid):
+                return False
 
             # Rule 1: at least one shared input
             old_inputs = {(txin.prev_txid, txin.prev_vout) for txin in old_tx.inputs
@@ -305,12 +333,10 @@ class Mempool:
 
             # Atomically remove old, add new
             self._remove_txid_locked(old_txid)
-            self._txs[new_txid] = new_tx
-            self._fees[new_txid] = new_fee
-            for txin in new_tx.inputs:
-                if txin.prev_txid != b"\x00" * 32:
-                    self._inputs[(txin.prev_txid, txin.prev_vout)] = new_txid
-            return True
+            if self.add(new_tx, new_fee):
+                return True
+            self.add(old_tx, old_fee)
+            return False
 
     def remove_txid(self, txid: bytes):
         with self._lock:

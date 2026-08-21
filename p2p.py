@@ -5,7 +5,7 @@ import threading
 import time
 import ipaddress
 from collections import defaultdict
-from utils import log_info, now
+from utils import hexstr, now, logger, LogCategory
 from block import Block, BlockHeader
 from pow import hash_meets_target
 
@@ -38,6 +38,40 @@ BAN_SCORE = {
 }
 
 
+def _peer_label(addr) -> str:
+    return f"{addr[0]}:{addr[1]}"
+
+
+def _parse_ip(host: str):
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _is_cgnat(host: str) -> bool:
+    ip = _parse_ip(host)
+    if ip is None or ip.version != 4:
+        return False
+    return ip in ipaddress.ip_network("100.64.0.0/10")
+
+
+def _is_routable_host(host: str) -> bool:
+    ip = _parse_ip(host)
+    if ip is None:
+        return False
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip.is_reserved
+    ):
+        return False
+    return not _is_cgnat(host)
+
+
 class Peer(threading.Thread):
     def __init__(self, network, sock, addr, outbound: bool):
         super().__init__(daemon=True)
@@ -51,6 +85,7 @@ class Peer(threading.Thread):
         self.peer_best = None
         self.requested = set()
         self.pending_children = {}
+        self.expected_headers_from = None
         self._alive = True
         self._send_lock = threading.Lock()
         self.last_seen = now()
@@ -58,7 +93,7 @@ class Peer(threading.Thread):
         self._hb_log_at = now()
         
         # Rate limiting (token bucket)
-        self._msg_tokens = MSG_TOKEN_BUCKET_SIZE
+        self._msg_tokens = self.network.cfg.p2p_msg_token_bucket
         self._msg_tokens_last = now()
         
         # Ban score
@@ -90,10 +125,13 @@ class Peer(threading.Thread):
         """Token bucket rate limiting. Returns True if allowed."""
         now_ts = now()
         elapsed = now_ts - self._msg_tokens_last
-        self._msg_tokens = min(MSG_TOKEN_BUCKET_SIZE, self._msg_tokens + elapsed * MSG_TOKEN_REFILL_RATE)
+        self._msg_tokens = min(
+            self.network.cfg.p2p_msg_token_bucket,
+            self._msg_tokens + elapsed * self.network.cfg.p2p_msg_token_refill_rate,
+        )
         self._msg_tokens_last = now_ts
         
-        cost = (payload_bytes / 1024.0) * MSG_TOKEN_COST_PER_KB
+        cost = (payload_bytes / 1024.0) * self.network.cfg.p2p_msg_token_cost_per_kb
         if self._msg_tokens >= cost:
             self._msg_tokens -= cost
             return True
@@ -112,10 +150,25 @@ class Peer(threading.Thread):
             self.ban_score = max(0, self.ban_score - int(hours_elapsed * BAN_SCORE_DECAY_PER_HOUR))
             self._ban_score_last_decay = now_ts
         
-        if self.ban_score >= BAN_SCORE_THRESHOLD:
-            log_info(f"P2P peer {self.addr} banned (score={self.ban_score}, reason={reason})")
+        threshold = self.network.cfg.p2p_ban_score_threshold
+        if self.ban_score >= threshold:
+            logger.warn(LogCategory.P2P, "Peer banned", 
+                       peer=_peer_label(self.addr),
+                       ban_score=self.ban_score, 
+                       reason=reason,
+                       outbound=self.outbound)
+            self.network._ban_peer(self.addr, self.network.cfg.p2p_ban_duration_hours)
             self.close()
             return True
+        logger.warn(
+            LogCategory.P2P,
+            "Peer misbehavior score increased",
+            peer=_peer_label(self.addr),
+            reason=reason,
+            score_added=score,
+            ban_score=self.ban_score,
+            threshold=threshold,
+        )
         return False
     
     def _track_bytes_received(self, payload_bytes: int):
@@ -125,7 +178,7 @@ class Peer(threading.Thread):
             self._bytes_recv = 0
             self._bytes_recv_last_minute = now_ts
         self._bytes_recv += payload_bytes
-        if self._bytes_recv > 10 * 1024 * 1024:  # 10 MB/min
+        if self._bytes_recv > self.network.cfg.p2p_max_bytes_per_minute:
             self._add_ban_score("large_message")
 
     def run(self):
@@ -144,11 +197,23 @@ class Peer(threading.Thread):
                 msg = read_msg(self.sock, self.network.cfg.max_msg_bytes, self.network.cfg.network_magic)
             except socket.timeout:
                 if self._ping_sent_at and (now() - self._ping_sent_at) > 30:
-                    log_info(f"P2P peer {self.addr} DEAD (no pong after ping) -> dropping")
+                    logger.warn(LogCategory.P2P, "Peer dead - no pong after ping",
+                               peer=_peer_label(self.addr),
+                               outbound=self.outbound)
                     break
                 self._ping_sent_at = now()
                 self.send("ping", self.network.cfg.network_magic)
                 continue
+            except ValueError as exc:
+                reason = str(exc)
+                if reason == "bad magic":
+                    self._add_ban_score("bad_magic")
+                elif reason == "message too large":
+                    self._add_ban_score("large_message")
+                else:
+                    self._add_ban_score("protocol_violation")
+                logger.warn(LogCategory.P2P, "Peer framing error", peer=_peer_label(self.addr), error=reason)
+                break
             if msg is None:
                 break
             cmd, payload = msg
@@ -167,7 +232,11 @@ class Peer(threading.Thread):
         self.last_seen = now()
         if now() - self._hb_log_at >= 120:
             self._hb_log_at = now()
-            log_info(f"P2P heartbeat peer={self.addr} alive (msg={cmd})")
+            logger.debug(LogCategory.P2P, "Heartbeat", 
+                        peer=_peer_label(self.addr),
+                        msg=cmd,
+                        height=self.height,
+                        outbound=self.outbound)
         if cmd == "version":
             data = json.loads(payload)
             node = self.network.node
@@ -177,6 +246,15 @@ class Peer(threading.Thread):
             self.height = int(data.get("height", -1))
             self.peer_best = data.get("best_hash")
             self.ua = data.get("ua", "unknown")
+            logger.info(
+                LogCategory.P2P,
+                "Peer version received",
+                peer=_peer_label(self.addr),
+                height=self.height,
+                best_hash=self.peer_best,
+                user_agent=self.ua,
+                outbound=self.outbound,
+            )
             self.send("verack", b"{}")
             self.send_addr()
             if self.height > node.chain.storage.height() or (
@@ -242,13 +320,13 @@ class Peer(threading.Thread):
                 for h_hex in headers:
                     try:
                         header = BlockHeader.from_hex(h_hex)
-                        if prev_hash is not None and header.prev_hash.hex() != prev_hash:
+                        if prev_hash is not None and hexstr(header.prev_hash) != prev_hash:
                             self._add_ban_score("invalid_header")
                             return
                         if not hash_meets_target(header.hash(), header.bits):
                             self._add_ban_score("invalid_pow")
                             return
-                        prev_hash = header.hash().hex()
+                        prev_hash = hexstr(header.hash())
                     except Exception:
                         self._add_ban_score("invalid_header")
                         return
@@ -264,18 +342,23 @@ class Peer(threading.Thread):
             self.network.node.on_peer_tx_hex(tx_hex, self)
         elif cmd == "ping":
             if payload != self.network.cfg.network_magic:
-                log_info(f"P2P peer {self.addr} sent ping with wrong magic -> drop")
+                logger.warn(LogCategory.P2P, "Wrong magic in ping",
+                           peer=_peer_label(self.addr))
                 self._add_ban_score("bad_magic")
                 self.close()
                 return
             self.send("pong", payload)
         elif cmd == "pong":
             if payload != self.network.cfg.network_magic:
-                log_info(f"P2P peer {self.addr} sent pong with wrong magic -> drop")
+                logger.warn(LogCategory.P2P, "Wrong magic in pong",
+                           peer=_peer_label(self.addr))
                 self._add_ban_score("bad_magic")
                 self.close()
                 return
             self._ping_sent_at = None
+        else:
+            self._add_ban_score("protocol_violation")
+            logger.warn(LogCategory.P2P, "Unknown P2P command", peer=_peer_label(self.addr), command=cmd)
 
     def send(self, command: str, payload: bytes):
         try:
@@ -342,7 +425,10 @@ class Peer(threading.Thread):
         except OSError:
             pass
         if getattr(self, "link_established", False):
-            log_info(f"P2P disconnected peer={self.addr} outbound={self.outbound}")
+            logger.info(LogCategory.P2P, "Peer disconnected",
+                       peer=_peer_label(self.addr),
+                       outbound=self.outbound,
+                       duration_sec=now() - self.last_seen if self.last_seen else 0)
         self.network.drop(self)
 
 
@@ -418,12 +504,19 @@ class Network:
         expiry = now() + duration_hours * 3600
         self._banned_peers[addr] = expiry
         self._save_banned_peers()
+        logger.warn(
+            LogCategory.P2P,
+            "Peer added to banlist",
+            peer=_peer_label(addr),
+            expires_at=expiry,
+            duration_hours=duration_hours,
+        )
 
     def start(self):
-        from utils import log_info
         import os
         import json
         if not self.cfg.enable_p2p:
+            logger.info(LogCategory.P2P, "P2P disabled by config")
             return
         
         self.peers_file = os.path.join(self.cfg.data_dir, "peers.json")
@@ -434,11 +527,23 @@ class Network:
                     for p in saved:
                         if isinstance(p, dict) and "host" in p and "port" in p:
                             self.known.add((p["host"], int(p["port"])))
-                log_info(f"Loaded {len(self.known)} known peer(s) from peers.json")
-            except Exception:
-                pass
+                logger.info(LogCategory.P2P, "Loaded known peers from disk",
+                           count=len(self.known),
+                           file=self.peers_file)
+            except Exception as e:
+                logger.warn(LogCategory.P2P, "Failed to load peers.json", error=str(e))
 
         self._running = True
+        logger.info(
+            LogCategory.P2P,
+            "Starting P2P network",
+            listen_host=self.cfg.p2p_host,
+            listen_port=self.cfg.p2p_port,
+            max_peers=self.cfg.max_peers,
+            seed_peers=len(self.cfg.seed_peers),
+            known_peers=len(self.known),
+            max_msg_bytes=self.cfg.max_msg_bytes,
+        )
         for host, port in self.cfg.seed_peers:
             self.connect(host, int(port))
         threading.Thread(target=self._connect_known, daemon=True).start()
@@ -469,13 +574,14 @@ class Network:
                 # Check outbound limit per subnet
                 outbound_in_subnet = sum(1 for p in self.peers.values() 
                                          if p.outbound and p._subnet == subnet)
-                if outbound_in_subnet >= MAX_OUTBOUND_PER_SUBNET:
+                if outbound_in_subnet >= self.cfg.p2p_max_outbound_per_subnet:
                     continue
                 
                 # Rate limit: max CONNECTION_RATE_LIMIT per second
                 now_ts = now()
-                if now_ts - self._last_outbound_connect < 1.0 / CONNECTION_RATE_LIMIT:
-                    time.sleep(1.0 / CONNECTION_RATE_LIMIT)
+                delay = 1.0 / max(self.cfg.p2p_connection_rate_limit, 0.1)
+                if now_ts - self._last_outbound_connect < delay:
+                    time.sleep(delay)
                 
                 # Pick best peer by reputation
                 best_peer = max(peers, key=lambda p: self._peer_reputation(p))
@@ -492,6 +598,7 @@ class Network:
                 snapshot = list(self.known)
             with open(self.peers_file, "w") as f:
                 json.dump([{"host": h, "port": p} for h, p in snapshot], f)
+            logger.debug(LogCategory.P2P, "Saved known peers", count=len(snapshot), file=self.peers_file)
         except Exception:
             pass
 
@@ -525,7 +632,8 @@ class Network:
         try:
             s.bind((self.cfg.p2p_host, self.cfg.p2p_port))
         except OSError as exc:
-            log_info(f"P2P listen FAILED on {self.cfg.p2p_host}:{self.cfg.p2p_port} ({exc}) — no inbound peers")
+            logger.error(LogCategory.P2P, "P2P listen failed - no inbound peers",
+                        host=self.cfg.p2p_host, port=self.cfg.p2p_port, error=str(exc))
             return
         s.listen(16)
         s.settimeout(1)
@@ -538,6 +646,12 @@ class Network:
             except OSError:
                 break
             if len(self.peers) >= self.cfg.max_peers:
+                logger.warn(
+                    LogCategory.P2P,
+                    "Inbound peer rejected - max peers reached",
+                    peer=_peer_label(addr),
+                    max_peers=self.cfg.max_peers,
+                )
                 try:
                     sock.close()
                 except OSError:
@@ -560,6 +674,9 @@ class Network:
             return
         with self._lock:
             key = (host, port)
+            if self._is_banned(key):
+                logger.debug(LogCategory.P2P, "Outbound peer skipped - banned", peer=_peer_label(key))
+                return
             if key in self._outbound or key in self.peers:
                 return
             if len(self.peers) >= self.cfg.max_peers:
@@ -567,12 +684,16 @@ class Network:
             self._outbound.add(key)
         try:
             sock = socket.create_connection((host, port), timeout=10)
-        except OSError:
+        except OSError as exc:
             self._outbound.discard(key)
+            logger.debug(LogCategory.P2P, "Outbound connect failed", peer=_peer_label(key), error=str(exc))
             return
         peer = Peer(self, sock, (host, port), outbound=True)
         if self._register(peer):
             peer.start()
+        else:
+            with self._lock:
+                self._outbound.discard(key)
 
     def _peer_reputation(self, peer_addr) -> float:
         """Get peer reputation (0.0 to 1.0). Higher = better."""
@@ -589,6 +710,7 @@ class Network:
                 peer.close()
                 return False
             if self._is_banned(peer.addr):
+                logger.warn(LogCategory.P2P, "Peer rejected - banned", peer=_peer_label(peer.addr))
                 peer.close()
                 return False
             
@@ -596,7 +718,14 @@ class Network:
             if not peer.outbound:
                 inbound_in_subnet = sum(1 for p in self.peers.values() 
                                         if not p.outbound and p._subnet == peer._subnet)
-                if inbound_in_subnet >= MAX_INBOUND_PER_SUBNET:
+                if inbound_in_subnet >= self.cfg.p2p_max_inbound_per_subnet:
+                    logger.warn(
+                        LogCategory.P2P,
+                        "Inbound peer rejected - subnet full",
+                        peer=_peer_label(peer.addr),
+                        subnet=str(peer._subnet),
+                        limit=self.cfg.p2p_max_inbound_per_subnet,
+                    )
                     peer.close()
                     return False
                 
@@ -604,7 +733,14 @@ class Network:
                 now_ts = now()
                 subnet_attempts = self._inbound_attempts[peer._subnet]
                 subnet_attempts[:] = [t for t in subnet_attempts if now_ts - t < 60]
-                if len(subnet_attempts) >= INBOUND_RATE_LIMIT_PER_SUBNET:
+                if len(subnet_attempts) >= self.cfg.p2p_inbound_rate_limit_per_subnet:
+                    logger.warn(
+                        LogCategory.P2P,
+                        "Inbound peer rejected - subnet rate limit",
+                        peer=_peer_label(peer.addr),
+                        subnet=str(peer._subnet),
+                        attempts=len(subnet_attempts),
+                    )
                     peer.close()
                     return False
                 subnet_attempts.append(now_ts)
@@ -613,11 +749,17 @@ class Network:
             self.peers[peer.addr] = peer
             self._subnet_peers[peer._subnet].add(peer.addr)
             peer.link_established = True
-            log_info(f"P2P connected peer={peer.addr[0]}:{peer.addr[1]} outbound={peer.outbound} subnet={peer._subnet}")
+            logger.info(LogCategory.P2P, "Peer connected",
+                       peer=_peer_label(peer.addr),
+                       outbound=peer.outbound,
+                       subnet=str(peer._subnet),
+                       anchor=peer.addr in self._anchor_peers,
+                       total_peers=len(self.peers))
             
             # Promote to anchor if we have few anchors and peer is outbound
             if peer.outbound and len(self._anchor_peers) < ANCHOR_CONNECTIONS:
                 self._anchor_peers.add(peer.addr)
+                logger.info(LogCategory.P2P, "Peer promoted to anchor", peer=_peer_label(peer.addr))
             
             return True
 
@@ -646,32 +788,24 @@ class Network:
     def learn_peers(self, peers: list):
         fresh = []
         for p in peers:
-            host, port = p.get("host"), int(p.get("port", 0))
+            if not isinstance(p, dict):
+                continue
+            host = p.get("host")
+            try:
+                port = int(p.get("port", 0))
+            except (TypeError, ValueError):
+                continue
             if not host or not 0 < port < 65536:
                 continue
-            # Filter non-routable addresses
-            try:
-                ip = ipaddress.ip_address(host)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
-                    continue
-                if ip.version == 4:
-                    # Filter CGNAT (100.64.0.0/10)
-                    if ipaddress.ip_network("100.64.0.0/10").overlaps(ipaddress.ip_network(f"{ip}/32")):
-                        continue
-                    # Filter reserved
-                    if ipaddress.ip_network("192.0.0.0/24").overlaps(ipaddress.ip_network(f"{ip}/32")):
-                        continue
-            except ValueError:
+            if not _is_routable_host(host):
+                logger.debug(LogCategory.P2P, "Addr relay skipped - non-routable", host=host, port=port)
                 continue
-            
             if port == self.cfg.p2p_port and host in (
                 self.cfg.p2p_host,
                 "127.0.0.1",
                 "localhost",
                 "::1",
             ):
-                continue
-            if _is_cgnat(host):
                 continue
             with self._lock:
                 if (host, port) in self.known:
@@ -680,6 +814,8 @@ class Network:
                     continue
                 self.known.add((host, port))
                 fresh.append((host, port))
+        if fresh:
+            logger.info(LogCategory.P2P, "Learned peers from addr relay", count=len(fresh))
         for host, port in fresh[:8]:
             threading.Thread(target=self.connect, args=(host, port), daemon=True).start()
 
@@ -701,6 +837,7 @@ class Network:
             "from": from_hash or node.chain.tip()["hash"],
             "stop": "0" * 64,
         }
+        logger.debug(LogCategory.SYNC, "Requesting blocks", peer=_peer_label(peer.addr), from_hash=data["from"])
         peer.send("getblocks", json.dumps(data).encode())
 
     def request_headers_from(self, peer: Peer, from_hash: str = None):
@@ -711,10 +848,14 @@ class Network:
             "stop": "0" * 64,
             "count": 2000,
         }
+        peer.expected_headers_from = data["from"]
+        logger.info(LogCategory.SYNC, "Requesting headers", peer=_peer_label(peer.addr), from_hash=data["from"], count=data["count"])
         peer.send("getheaders", json.dumps(data).encode())
 
     def request_block(self, peer: Peer, block_hash_hex: str):
         payload = json.dumps({"items": [{"type": "block", "hash": block_hash_hex}]})
+        peer.requested.add(("block", block_hash_hex))
+        logger.debug(LogCategory.SYNC, "Requesting block", peer=_peer_label(peer.addr), block_hash=block_hash_hex)
         peer.send("getdata", payload.encode())
 
     def reply_blocks(self, peer: Peer, from_hash: str, stop_hash: str):
@@ -739,6 +880,7 @@ class Network:
         items = [{"type": "block", "hash": h} for h in hashes]
         if not items:
             items = [{"type": "tx", "hash": "0"}]
+        logger.debug(LogCategory.SYNC, "Replying block inventory", peer=_peer_label(peer.addr), count=len(items), from_hash=from_hash)
         peer.send("inv", json.dumps({"items": items}).encode())
 
     def reply_headers(self, peer: Peer, from_hash: str, stop_hash: str, count: int = 2000):
@@ -752,35 +894,80 @@ class Network:
                 break
         if start is None:
             start = 1
-        for row in rows[start : start + count]:
+        bounded_count = max(0, min(int(count or 2000), 2000))
+        for row in rows[start : start + bounded_count]:
             if stop_hash and stop_hash != "0" * 64 and row["hash"] == stop_hash:
                 break
             block = Block.from_bytes(row["raw"])
             headers.append(block.header.to_hex())
+        logger.info(LogCategory.SYNC, "Replying headers", peer=_peer_label(peer.addr), count=len(headers), from_hash=from_hash)
         peer.send("headers", json.dumps({"headers": headers}).encode())
 
     def on_peer_headers(self, peer: Peer, headers_hex: list):
         """Process received headers — verify PoW chain, then request blocks in parallel."""
         if not headers_hex:
             return
-        node = self.node
         prev_hash = None
         valid_headers = []
+        all_header_hashes = []
+        chain = self.node.chain
+        first_height = chain.storage.height() + 1
+        expected_parent = peer.expected_headers_from or chain.tip()["hash"]
+        history_rows = list(chain.storage.all_blocks())
+        parent_row = history_rows[-1] if history_rows else None
         for h_hex in headers_hex:
             try:
                 header = BlockHeader.from_hex(h_hex)
             except Exception:
                 break
-            if prev_hash is not None and header.prev_hash.hex() != prev_hash:
+            header_hash = hexstr(header.hash())
+            header_prev = hexstr(header.prev_hash)
+            if prev_hash is None and header_prev != expected_parent:
+                logger.warn(
+                    LogCategory.SYNC,
+                    "Header batch rejected - does not connect to requested locator",
+                    peer=_peer_label(peer.addr),
+                    expected_parent=expected_parent,
+                    header_prev=header_prev,
+                )
+                peer._add_ban_score("invalid_header")
+                return
+            if prev_hash is not None and header_prev != prev_hash:
                 break
             if not hash_meets_target(header.hash(), header.bits):
                 break
-            valid_headers.append((header.hash().hex(), header))
-            prev_hash = header.hash().hex()
-        
+            height = first_height + len(all_header_hashes)
+            if parent_row is not None and header.bits != chain.expected_bits(height, parent_row, history_rows):
+                logger.warn(
+                    LogCategory.SYNC,
+                    "Header batch rejected - incorrect difficulty bits",
+                    peer=_peer_label(peer.addr),
+                    height=height,
+                    header_bits=header.bits,
+                )
+                peer._add_ban_score("invalid_header")
+                return
+            all_header_hashes.append(header_hash)
+            if not chain.storage.has(header_hash):
+                valid_headers.append((header_hash, header))
+            parent_row = {
+                "height": height,
+                "hash": header_hash,
+                "prev_hash": header_prev,
+                "merkle_root": hexstr(header.merkle_root),
+                "timestamp": header.timestamp,
+                "bits": header.bits,
+                "nonce": header.nonce,
+                "version": header.version,
+                "work": 0,
+            }
+            history_rows.append(parent_row)
+            prev_hash = header_hash
+
         if not valid_headers:
             return
-        
+        chain.mark_assume_valid_headers(first_height, all_header_hashes)
+        logger.info(LogCategory.SYNC, "Accepted header batch", peer=_peer_label(peer.addr), count=len(valid_headers))
         # Request blocks in parallel from multiple peers
         self._request_blocks_parallel(valid_headers)
 

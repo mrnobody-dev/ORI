@@ -10,7 +10,7 @@ from mempool import Mempool
 from p2p import Network
 from storage import Storage
 from tx import Transaction
-from utils import hexstr
+from utils import hexstr, logger, LogCategory
 
 
 class Node:
@@ -54,12 +54,26 @@ class Node:
         try:
             from dns import resolve_a
 
+            resolved = 0
             for ip in resolve_a(
                 self.cfg.seed_dns_name, self.cfg.seed_dns_host, self.cfg.seed_dns_port
             ):
+                resolved += 1
                 self.network.connect(ip, self.cfg.seed_dns_p2p_port)
+            logger.info(
+                LogCategory.NETWORK,
+                "DNS seed resolved",
+                seed_name=self.cfg.seed_dns_name,
+                seed_host=self.cfg.seed_dns_host,
+                count=resolved,
+            )
         except Exception:
-            pass
+            logger.warn(
+                LogCategory.NETWORK,
+                "DNS seed failed",
+                seed_name=self.cfg.seed_dns_name,
+                seed_host=self.cfg.seed_dns_host,
+            )
 
     def _relay_output_ok(self, tx) -> tuple:
         from bech32 import validate_address
@@ -137,13 +151,13 @@ class Node:
         with self._lock:
             ok, reason, txid = self._accept_mempool_tx(tx)
         if not ok:
+            logger.warn(LogCategory.MEMPOOL, "Local tx rejected", reason=reason)
             return False, reason, None
         self.network.broadcast_inv("tx", tx.txid().hex())
-        from utils import log_info
         if reason == "replaced":
-            log_info(f"Tx REPLACED (RBF) | txid {tx.txid().hex()}")
+            logger.info(LogCategory.MEMPOOL, "Tx replaced (RBF)", txid=tx.txid().hex())
         else:
-            log_info(f"Tx ACCEPTED into mempool | txid {tx.txid().hex()}")
+            logger.info(LogCategory.MEMPOOL, "Tx accepted into mempool", txid=tx.txid().hex())
         return True, reason, txid
 
     def bump_fee(self, old_txid_hex: str, wallet_info: dict, new_tier: int, cfg) -> tuple:
@@ -204,32 +218,40 @@ class Node:
 
     def on_peer_tx_hex(self, tx_hex: str, peer):
         if len(tx_hex) > self.cfg.max_block_bytes * 2:
+            peer._add_ban_score("invalid_tx")
+            logger.warn(LogCategory.MEMPOOL, "Peer tx rejected - too large", peer=f"{peer.addr[0]}:{peer.addr[1]}")
             return
         try:
             tx = Transaction.from_hex(tx_hex)
-        except Exception:
+        except Exception as exc:
+            peer._add_ban_score("invalid_tx")
+            logger.warn(LogCategory.MEMPOOL, "Peer tx rejected - malformed", peer=f"{peer.addr[0]}:{peer.addr[1]}", error=str(exc))
             return
         peer.requested.discard(("tx", tx.txid().hex()))
         with self._lock:
             ok, reason, _ = self._accept_mempool_tx(tx)
         if not ok:
+            if reason not in ("already known", "mempool full or already in mempool"):
+                logger.debug(LogCategory.MEMPOOL, "Peer tx rejected by policy", peer=f"{peer.addr[0]}:{peer.addr[1]}", txid=tx.txid().hex(), reason=reason)
             return
         self.network.broadcast_inv("tx", tx.txid().hex(), exclude=peer)
-        from utils import log_info
-        log_info(f"Tx ACCEPTED (from peer) into mempool | txid {tx.txid().hex()}")
+        logger.info(LogCategory.MEMPOOL, "Tx accepted from peer", txid=tx.txid().hex())
 
     def _log_block_result(self, source, block, ok, reason, height):
-        from utils import log_info
         h = block.block_hash_hex()
         if ok:
             if reason == "reorg":
-                log_info(f"REORG: chain switched to height {height} | new tip {h} | txs {len(block.transactions)} | src {source}")
+                logger.warn(LogCategory.CONSENSUS, "Chain reorg",
+                           height=height, tip=h, txs=len(block.transactions), source=source)
             else:
-                log_info(f"Block ACCEPTED height {height} | hash {h} | txs {len(block.transactions)} | src {source}")
+                logger.info(LogCategory.CONSENSUS, "Block accepted",
+                           height=height, hash=h, txs=len(block.transactions), source=source)
         elif reason == "weak fork stored as side branch":
-            log_info(f"FORK: equal-work block stored as SIDE BRANCH | height {height} | hash {h} | src {source}")
+            logger.info(LogCategory.CONSENSUS, "Fork - equal-work side branch",
+                       height=height, hash=h, source=source)
         else:
-            log_info(f"Block REJECTED | height {height if height is not None else '?'} | hash {h} | reason {reason} | src {source}")
+            logger.warn(LogCategory.CONSENSUS, "Block rejected",
+                       height=height, hash=h, reason=reason, source=source)
 
     def submit_raw_block(self, block_hex: str):
         if len(block_hex) > self.cfg.max_block_bytes * 2 + 2:
@@ -252,11 +274,15 @@ class Node:
     def on_peer_block_hex(self, block_hex: str, peer):
         if len(block_hex) > self.cfg.max_block_bytes * 2 + 2:
             self._discard_pending_block(peer, block_hex)
+            peer._add_ban_score("large_message")
+            logger.warn(LogCategory.CONSENSUS, "Peer block rejected - too large", peer=f"{peer.addr[0]}:{peer.addr[1]}")
             return
         try:
             block = Block.from_hex(block_hex)
-        except Exception:
+        except Exception as exc:
             self._discard_pending_block(peer, block_hex)
+            peer._add_ban_score("invalid_block")
+            logger.warn(LogCategory.CONSENSUS, "Peer block rejected - malformed", peer=f"{peer.addr[0]}:{peer.addr[1]}", error=str(exc))
             return
         peer.requested.discard(("block", block.block_hash_hex()))
         with self._lock:
@@ -276,6 +302,8 @@ class Node:
             elif reason == "gap in chain":
                 self.network.request_blocks_from(peer)
             else:
+                if reason not in ("duplicate block", "invalid block (cached)"):
+                    peer._add_ban_score("invalid_block")
                 self._discard_pending_block(peer, block_hex)
             return
         for child, parent_hash in list(peer.pending_children.items()):

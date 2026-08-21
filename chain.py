@@ -16,7 +16,7 @@ from pow import (
 from storage import Storage
 from tx import LOCKTIME_THRESHOLD, coinbase_height, coinbase_tx
 from utxo import UTXOSet
-from utils import hexstr, now
+from utils import hexstr, now, logger, LogCategory
 
 GENESIS_TIMESTAMP = 1784610000
 _INVALID_BLOCKS_MAX = 10_000
@@ -31,6 +31,7 @@ class Blockchain:
         self.invalid_blocks = set()
         self._lock = threading.RLock()
         self.genesis = None
+        self._assume_valid_headers_verified = False
 
     def load(self):
         with self._lock:
@@ -71,7 +72,6 @@ class Blockchain:
         return Block(header, [coinbase])
 
     def _rebuild_state(self):
-        from utils import log_info
         utxo = UTXOSet()
         index = {}
         count = 0
@@ -81,9 +81,23 @@ class Blockchain:
             count += 1
         self.utxo = utxo
         self.tx_index = index
-        log_info(f"Rebuilt UTXO set: {utxo.count()} entries, supply={utxo.total_supply()} sat")
+        logger.info(LogCategory.CHAIN, "Rebuilt UTXO set", 
+                   utxo_entries=utxo.count(), 
+                   supply_sats=utxo.total_supply(),
+                   blocks_processed=count)
         tip = self.tip()
-        log_info(f"Tip: height={tip['height']} hash={tip['hash']}")
+        logger.info(LogCategory.CHAIN, "Chain tip", 
+                   height=tip['height'], 
+                   hash=tip['hash'],
+                   difficulty=tip.get('difficulty'))
+        if self._assume_valid_active(self.storage.height()):
+            logger.info(
+                LogCategory.CHAIN,
+                "AssumeValid active for buried main-chain block",
+                assume_valid_height=self.cfg.assume_valid_height,
+                assume_valid_block=self.cfg.assume_valid_block,
+                min_depth=self.cfg.assume_valid_min_depth,
+            )
 
     def _parse_row(self, row) -> Block:
         raw = row["raw"]
@@ -238,6 +252,46 @@ class Blockchain:
             return False, "outputs exceed inputs", 0
         return True, "ok", total_in - total_out
 
+    def _assume_valid_active(self, current_height: int) -> bool:
+        if not self.cfg.assume_valid_block or self.cfg.assume_valid_height <= 0:
+            return False
+        if self._assume_valid_headers_verified:
+            return True
+        if current_height < self.cfg.assume_valid_height + self.cfg.assume_valid_min_depth:
+            return False
+        row = self.storage.block_by_height(self.cfg.assume_valid_height)
+        return row is not None and row["hash"] == self.cfg.assume_valid_block
+
+    def _skip_scripts_for_assumevalid(self, height: int) -> bool:
+        return height <= self.cfg.assume_valid_height and self._assume_valid_active(self.storage.height())
+
+    def mark_assume_valid_headers(self, first_height: int, header_hashes: list) -> bool:
+        """Mark configured AssumeValid hash as buried in a verified header chain.
+
+        This is not a consensus rule. It only allows skipping historical script
+        checks for blocks at or below the configured height after the node has
+        seen a continuous PoW-valid header segment with enough burial depth.
+        """
+        if not self.cfg.assume_valid_block or self.cfg.assume_valid_height <= 0:
+            return False
+        offset = self.cfg.assume_valid_height - first_height
+        if offset < 0 or offset >= len(header_hashes):
+            return False
+        depth = len(header_hashes) - offset - 1
+        if depth < self.cfg.assume_valid_min_depth:
+            return False
+        if header_hashes[offset] != self.cfg.assume_valid_block:
+            return False
+        self._assume_valid_headers_verified = True
+        logger.info(
+            LogCategory.CHAIN,
+            "AssumeValid verified from header chain",
+            assume_valid_height=self.cfg.assume_valid_height,
+            assume_valid_block=self.cfg.assume_valid_block,
+            header_depth=depth,
+        )
+        return True
+
     def _apply_block_to_utxo(self, block: Block, utxo: UTXOSet, height: int):
         """Validate block and apply ALL transactions (including coinbase) to utxo.
         Used during add_block(). Do NOT call _apply_unchecked after this for same block."""
@@ -263,8 +317,7 @@ class Blockchain:
         total_fees = 0
         block_time = block.header.timestamp
         
-        # AssumeValid: skip script verification for blocks at or below assume_valid_height
-        assume_valid = (self.cfg.assume_valid_height > 0 and height <= self.cfg.assume_valid_height)
+        assume_valid = self._skip_scripts_for_assumevalid(height)
         
         for tx in block.transactions[1:]:
             ok, reason, fee = self.validate_tx(tx, utxo, height, block_time, assume_valid=assume_valid)

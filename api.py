@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import ipaddress
 import secrets
 import time
 
@@ -35,9 +36,28 @@ def create_app(node, lifespan=None):
         lifespan=lifespan,
     )
 
+    def _api_bind_is_public() -> bool:
+        host = str(node.cfg.api_host or "").strip()
+        if host in ("", "0.0.0.0", "::"):
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return host not in ("localhost",)
+        return not ip.is_loopback
+
     def _check_api_token(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
         token = node.cfg.api_token or ""
         if not token:
+            if node.cfg.require_api_token_when_public and _api_bind_is_public():
+                from utils import logger, LogCategory
+                logger.critical(
+                    LogCategory.SECURITY,
+                    "Protected API blocked because public bind has no token",
+                    api_host=node.cfg.api_host,
+                    endpoint_requires_token=True,
+                )
+                raise HTTPException(status_code=403, detail="api token required for public bind")
             return
         provided = x_api_key or ""
         if len(provided) != len(token) or not secrets.compare_digest(provided, token):
@@ -99,6 +119,9 @@ def create_app(node, lifespan=None):
             "p2p_port": node.cfg.p2p_port,
             "api_port": node.cfg.api_port,
             "p2p_enabled": node.cfg.enable_p2p,
+            "protected_api_requires_token": bool(
+                node.cfg.api_token or (node.cfg.require_api_token_when_public and _api_bind_is_public())
+            ),
         }
 
     @app.get("/stats", summary="Node statistics (compact)", tags=["Info"])
@@ -397,6 +420,9 @@ def create_app(node, lifespan=None):
             "connections": node.network.peer_count(),
             "known_peers": len(node.network.known),
             "seed_dns": node.cfg.seed_dns_host or None,
+            "protected_api_requires_token": bool(
+                node.cfg.api_token or (node.cfg.require_api_token_when_public and _api_bind_is_public())
+            ),
         }
 
     @app.post("/network/addpeer", summary="Connect to a peer", tags=["Network"])
@@ -446,15 +472,37 @@ def create_app(node, lifespan=None):
 def make_lifespan(node):
     @asynccontextmanager
     async def lifespan(app):
-        from utils import log_info
-        log_info(f"Starting ORI Node v{VERSION}...")
+        from utils import logger, LogCategory
+        logger.info(
+            LogCategory.STARTUP,
+            "Starting ORI Node",
+            version=VERSION,
+            api_host=node.cfg.api_host,
+            api_port=node.cfg.api_port,
+            p2p_host=node.cfg.p2p_host,
+            p2p_port=node.cfg.p2p_port,
+        )
+        if not node.cfg.api_token and node.cfg.require_api_token_when_public:
+            host = str(node.cfg.api_host or "")
+            public_bind = host in ("0.0.0.0", "::")
+            try:
+                public_bind = public_bind or not ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                public_bind = public_bind or host not in ("", "localhost")
+            if public_bind:
+                logger.critical(
+                    LogCategory.SECURITY,
+                    "Protected API endpoints will be blocked until BTPY_API_TOKEN is set",
+                    api_host=node.cfg.api_host,
+                    api_port=node.cfg.api_port,
+                )
         node.start()
-        log_info("Node is fully operational.")
+        logger.info(LogCategory.STARTUP, "Node fully operational")
         try:
             yield
         finally:
-            log_info("Shutting down node...")
+            logger.info(LogCategory.SHUTDOWN, "Shutting down node...")
             node.stop()
-            log_info("Shutdown complete.")
+            logger.info(LogCategory.SHUTDOWN, "Shutdown complete")
 
     return lifespan

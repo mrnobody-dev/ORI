@@ -41,6 +41,16 @@ class Config:
     coinbase_note: str = "ORI genesis 2026-08-17 blocktime=60s"
     max_peers: int = 32
     max_msg_bytes: int = 4_000_000
+    p2p_msg_token_refill_rate: float = 10.0
+    p2p_msg_token_bucket: float = 100.0
+    p2p_msg_token_cost_per_kb: float = 1.0
+    p2p_max_bytes_per_minute: int = 10 * 1024 * 1024
+    p2p_ban_score_threshold: int = 100
+    p2p_ban_duration_hours: int = 24
+    p2p_max_inbound_per_subnet: int = 3
+    p2p_max_outbound_per_subnet: int = 1
+    p2p_connection_rate_limit: float = 2.0
+    p2p_inbound_rate_limit_per_subnet: int = 3
     max_mempool_txs: int = 100_000
     low_s_activation_height: int = 53
     network_magic: bytes = b"\x4f\x52\x49\x31"
@@ -60,8 +70,10 @@ class Config:
     )
     min_relay_fee_per_vb: float = 0.28
     api_token: str = ""
-    assume_valid_block: str = "b26dfbdefdc0cdf399b0e458f3a1a24df847b77b063456957ffe83b007000000"
-    assume_valid_height: int = 1000
+    require_api_token_when_public: bool = True
+    assume_valid_block: str = ""
+    assume_valid_height: int = 0
+    assume_valid_min_depth: int = 1440
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -125,8 +137,22 @@ class Config:
             coinbase_maturity_activation_height=int(
                 _env_or_file("BTPY_COINBASE_MATURITY_ACTIVATION", "coinbase_maturity_activation_height", "0")
             ),
+            p2p_msg_token_refill_rate=float(_env_or_file("BTPY_P2P_MSG_TOKEN_REFILL_RATE", "p2p_msg_token_refill_rate", "10.0")),
+            p2p_msg_token_bucket=float(_env_or_file("BTPY_P2P_MSG_TOKEN_BUCKET", "p2p_msg_token_bucket", "100.0")),
+            p2p_msg_token_cost_per_kb=float(_env_or_file("BTPY_P2P_MSG_TOKEN_COST_PER_KB", "p2p_msg_token_cost_per_kb", "1.0")),
+            p2p_max_bytes_per_minute=int(_env_or_file("BTPY_P2P_MAX_BYTES_PER_MINUTE", "p2p_max_bytes_per_minute", str(10 * 1024 * 1024))),
+            p2p_ban_score_threshold=int(_env_or_file("BTPY_P2P_BAN_SCORE_THRESHOLD", "p2p_ban_score_threshold", "100")),
+            p2p_ban_duration_hours=int(_env_or_file("BTPY_P2P_BAN_DURATION_HOURS", "p2p_ban_duration_hours", "24")),
+            p2p_max_inbound_per_subnet=int(_env_or_file("BTPY_P2P_MAX_INBOUND_PER_SUBNET", "p2p_max_inbound_per_subnet", "3")),
+            p2p_max_outbound_per_subnet=int(_env_or_file("BTPY_P2P_MAX_OUTBOUND_PER_SUBNET", "p2p_max_outbound_per_subnet", "1")),
+            p2p_connection_rate_limit=float(_env_or_file("BTPY_P2P_CONNECTION_RATE_LIMIT", "p2p_connection_rate_limit", "2.0")),
+            p2p_inbound_rate_limit_per_subnet=int(_env_or_file("BTPY_P2P_INBOUND_RATE_LIMIT_PER_SUBNET", "p2p_inbound_rate_limit_per_subnet", "3")),
             max_mempool_txs=int(_env_or_file("BTPY_MAX_MEMPOOL_TXS", "max_mempool_txs", "100000")),
             api_token=str(_env_or_file("BTPY_API_TOKEN", "api_token", "")),
+            require_api_token_when_public=str(
+                _env_or_file("BTPY_REQUIRE_API_TOKEN_WHEN_PUBLIC", "require_api_token_when_public", "1")
+            ) == "1",
             assume_valid_block=str(_env_or_file("BTPY_ASSUME_VALID_BLOCK", "assume_valid_block", "")),
             assume_valid_height=int(_env_or_file("BTPY_ASSUME_VALID_HEIGHT", "assume_valid_height", "0")),
+            assume_valid_min_depth=int(_env_or_file("BTPY_ASSUME_VALID_MIN_DEPTH", "assume_valid_min_depth", "1440")),
         )

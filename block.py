@@ -28,6 +28,8 @@ class BlockHeader:
 
     @classmethod
     def parse(cls, data: bytes, pos: int = 0):
+        if pos + MAX_BLOCK_HEADER_BYTES > len(data):
+            raise ValueError("truncated block header")
         version = struct.unpack_from("<i", data, pos)[0]
         pos += 4
         prev = data[pos : pos + 32]
@@ -40,6 +42,17 @@ class BlockHeader:
 
     def hash(self) -> bytes:
         return sha256d(self.serialize())
+
+    def to_hex(self) -> str:
+        return self.serialize().hex()
+
+    @classmethod
+    def from_hex(cls, hexed: str):
+        raw = bytes.fromhex(hexed)
+        header, pos = cls.parse(raw)
+        if pos != len(raw):
+            raise ValueError("trailing bytes in block header")
+        return header
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +84,10 @@ class Block:
     def parse(cls, data: bytes, pos: int = 0):
         header, pos = BlockHeader.parse(data, pos)
         n_tx, pos = varint_decode(data, pos)
+        if n_tx == 0:
+            raise ValueError("block has no transactions")
+        if n_tx > max(1, (len(data) - pos) // 10):
+            raise ValueError("transaction count exceeds payload bounds")
         txs = []
         for _ in range(n_tx):
             tx, pos = Transaction.parse(data, pos)
@@ -98,6 +115,10 @@ class Block:
     @classmethod
     def from_hex(cls, hexed: str):
         raw = bytes.fromhex(hexed)
+        return cls.from_bytes(raw)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes):
         block, pos = cls.parse(raw)
         if pos != len(raw):
             raise ValueError("trailing bytes in block")
