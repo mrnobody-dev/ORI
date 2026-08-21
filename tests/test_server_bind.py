@@ -44,3 +44,12 @@ def test_config_json_overrides_default_bind_settings(tmp_path, monkeypatch):
     assert cfg.api_host == "0.0.0.0"
     assert cfg.api_port == 8123
     assert cfg.p2p_port == 8333
+
+
+def test_config_from_env_default_api_bind_is_public(tmp_path, monkeypatch):
+    monkeypatch.setenv("BTPY_CONFIG_FILE", str(tmp_path / "missing-config.json"))
+    monkeypatch.delenv("BTPY_API_HOST", raising=False)
+
+    cfg = __import__("config").Config.from_env()
+
+    assert cfg.api_host == "0.0.0.0"

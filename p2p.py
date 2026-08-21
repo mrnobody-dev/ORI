@@ -105,6 +105,7 @@ class Peer(threading.Thread):
         
         # Connection tracking
         self.link_established = False
+        self.connected_at = now()
         self._bytes_recv = 0
         self._bytes_recv_last_minute = now()
         
@@ -425,10 +426,12 @@ class Peer(threading.Thread):
         except OSError:
             pass
         if getattr(self, "link_established", False):
-            logger.info(LogCategory.P2P, "Peer disconnected",
-                       peer=_peer_label(self.addr),
-                       outbound=self.outbound,
-                       duration_sec=now() - self.last_seen if self.last_seen else 0)
+            duration_sec = max(0.0, now() - self.connected_at)
+            logger.debug(LogCategory.P2P, "Peer disconnected",
+                        peer=_peer_label(self.addr),
+                        outbound=self.outbound,
+                        duration_sec=round(duration_sec, 3))
+            self.network._record_peer_event("disconnected", peer=self, duration_sec=duration_sec)
         self.network.drop(self)
 
 
@@ -442,6 +445,7 @@ class Network:
         self._lock = threading.RLock()
         self._listener = None
         self._reconnect_loop = None
+        self._metrics_loop = None
         self._running = False
         
         # Connection rate limiting
@@ -455,6 +459,11 @@ class Network:
         # Banned peers (persisted)
         self._banned_peers = {}  # addr -> ban_expiry_timestamp
         self._load_banned_peers()
+
+        # High-churn peer lifecycle events are aggregated at INFO and kept
+        # individually available at DEBUG. This keeps large deployments readable.
+        self._peer_event_counts = defaultdict(int)
+        self._peer_event_last_at = now()
     
     def _load_banned_peers(self):
         import os
@@ -551,6 +560,54 @@ class Network:
         self._listener.start()
         self._reconnect_loop = threading.Thread(target=self._reconnect_seeds, daemon=True)
         self._reconnect_loop.start()
+        self._metrics_loop = threading.Thread(target=self._peer_metrics_loop, daemon=True)
+        self._metrics_loop.start()
+
+    def _peer_log_interval(self) -> float:
+        return max(5.0, float(getattr(self.cfg, "p2p_peer_log_interval_seconds", 60)))
+
+    def _record_peer_event(self, event: str, peer: Peer | None = None, **fields):
+        with self._lock:
+            self._peer_event_counts[event] += 1
+            if peer is not None:
+                direction = "outbound" if peer.outbound else "inbound"
+                self._peer_event_counts[f"{event}_{direction}"] += 1
+            self._maybe_log_peer_summary_locked()
+
+    def _peer_metrics_loop(self):
+        while self._running:
+            time.sleep(self._peer_log_interval())
+            with self._lock:
+                self._maybe_log_peer_summary_locked(force=True)
+
+    def _maybe_log_peer_summary_locked(self, force: bool = False):
+        now_ts = now()
+        if not force and now_ts - self._peer_event_last_at < self._peer_log_interval():
+            return
+        if not self._peer_event_counts and not force:
+            return
+
+        counts = dict(self._peer_event_counts)
+        self._peer_event_counts.clear()
+        self._peer_event_last_at = now_ts
+
+        outbound = sum(1 for p in self.peers.values() if p.outbound)
+        inbound = len(self.peers) - outbound
+        logger.info(
+            LogCategory.P2P,
+            "Peer lifecycle summary",
+            active_peers=len(self.peers),
+            outbound_peers=outbound,
+            inbound_peers=inbound,
+            known_peers=len(self.known),
+            anchors=len(self._anchor_peers),
+            banned_peers=len(self._banned_peers),
+            connected=counts.get("connected", 0),
+            disconnected=counts.get("disconnected", 0),
+            rejected=counts.get("rejected", 0),
+            connect_failed=counts.get("connect_failed", 0),
+            interval_sec=round(self._peer_log_interval(), 3),
+        )
 
     def _connect_known(self):
         while self._running:
@@ -646,6 +703,7 @@ class Network:
             except OSError:
                 break
             if len(self.peers) >= self.cfg.max_peers:
+                self._record_peer_event("rejected")
                 logger.warn(
                     LogCategory.P2P,
                     "Inbound peer rejected - max peers reached",
@@ -687,6 +745,7 @@ class Network:
         except OSError as exc:
             self._outbound.discard(key)
             logger.debug(LogCategory.P2P, "Outbound connect failed", peer=_peer_label(key), error=str(exc))
+            self._record_peer_event("connect_failed")
             return
         peer = Peer(self, sock, (host, port), outbound=True)
         if self._register(peer):
@@ -710,6 +769,7 @@ class Network:
                 peer.close()
                 return False
             if self._is_banned(peer.addr):
+                self._record_peer_event("rejected", peer=peer)
                 logger.warn(LogCategory.P2P, "Peer rejected - banned", peer=_peer_label(peer.addr))
                 peer.close()
                 return False
@@ -719,6 +779,7 @@ class Network:
                 inbound_in_subnet = sum(1 for p in self.peers.values() 
                                         if not p.outbound and p._subnet == peer._subnet)
                 if inbound_in_subnet >= self.cfg.p2p_max_inbound_per_subnet:
+                    self._record_peer_event("rejected", peer=peer)
                     logger.warn(
                         LogCategory.P2P,
                         "Inbound peer rejected - subnet full",
@@ -734,6 +795,7 @@ class Network:
                 subnet_attempts = self._inbound_attempts[peer._subnet]
                 subnet_attempts[:] = [t for t in subnet_attempts if now_ts - t < 60]
                 if len(subnet_attempts) >= self.cfg.p2p_inbound_rate_limit_per_subnet:
+                    self._record_peer_event("rejected", peer=peer)
                     logger.warn(
                         LogCategory.P2P,
                         "Inbound peer rejected - subnet rate limit",
@@ -749,12 +811,13 @@ class Network:
             self.peers[peer.addr] = peer
             self._subnet_peers[peer._subnet].add(peer.addr)
             peer.link_established = True
-            logger.info(LogCategory.P2P, "Peer connected",
-                       peer=_peer_label(peer.addr),
-                       outbound=peer.outbound,
-                       subnet=str(peer._subnet),
-                       anchor=peer.addr in self._anchor_peers,
-                       total_peers=len(self.peers))
+            logger.debug(LogCategory.P2P, "Peer connected",
+                        peer=_peer_label(peer.addr),
+                        outbound=peer.outbound,
+                        subnet=str(peer._subnet),
+                        anchor=peer.addr in self._anchor_peers,
+                        total_peers=len(self.peers))
+            self._record_peer_event("connected", peer=peer)
             
             # Promote to anchor if we have few anchors and peer is outbound
             if peer.outbound and len(self._anchor_peers) < ANCHOR_CONNECTIONS:

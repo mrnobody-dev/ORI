@@ -51,6 +51,7 @@ class Config:
     p2p_max_outbound_per_subnet: int = 1
     p2p_connection_rate_limit: float = 2.0
     p2p_inbound_rate_limit_per_subnet: int = 3
+    p2p_peer_log_interval_seconds: int = 60
     max_mempool_txs: int = 100_000
     low_s_activation_height: int = 53
     network_magic: bytes = b"\x4f\x52\x49\x31"
@@ -118,7 +119,7 @@ class Config:
 
         return cls(
             data_dir=_env_or_file("BTPY_DATA_DIR", "data_dir", "data"),
-            api_host=_env_or_file("BTPY_API_HOST", "api_host", "127.0.0.1"),
+            api_host=_env_or_file("BTPY_API_HOST", "api_host", "0.0.0.0"),
             api_port=int(_env_or_file("BTPY_API_PORT", "api_port", "8000")),
             p2p_host=_env_or_file("BTPY_P2P_HOST", "p2p_host", "0.0.0.0"),
             p2p_port=int(_env_or_file("BTPY_P2P_PORT", "p2p_port", "8033")),
@@ -147,6 +148,9 @@ class Config:
             p2p_max_outbound_per_subnet=int(_env_or_file("BTPY_P2P_MAX_OUTBOUND_PER_SUBNET", "p2p_max_outbound_per_subnet", "1")),
             p2p_connection_rate_limit=float(_env_or_file("BTPY_P2P_CONNECTION_RATE_LIMIT", "p2p_connection_rate_limit", "2.0")),
             p2p_inbound_rate_limit_per_subnet=int(_env_or_file("BTPY_P2P_INBOUND_RATE_LIMIT_PER_SUBNET", "p2p_inbound_rate_limit_per_subnet", "3")),
+            p2p_peer_log_interval_seconds=int(
+                _env_or_file("BTPY_P2P_PEER_LOG_INTERVAL_SECONDS", "p2p_peer_log_interval_seconds", "60")
+            ),
             max_mempool_txs=int(_env_or_file("BTPY_MAX_MEMPOOL_TXS", "max_mempool_txs", "100000")),
             api_token=str(_env_or_file("BTPY_API_TOKEN", "api_token", "")),
             require_api_token_when_public=str(

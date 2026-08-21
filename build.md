@@ -341,6 +341,16 @@ Hardening tambahan 2026-08-21:
     benchmark singkat per template dan memilih kernel tercepat di mesin lokal.
     Miner juga mendukung `--api-token` / `BTPY_API_TOKEN` untuk endpoint mining
     yang protected saat API bind public.
+29. **P2P lifecycle logging anti-spam 2026-08-21**: event churn normal
+    `Peer connected` / `Peer disconnected` diturunkan ke `DEBUG` agar jaringan
+    besar tidak memenuhi terminal operator. Default `INFO` sekarang memakai
+    ringkasan periodik `Peer lifecycle summary` berisi active/outbound/inbound,
+    known, anchor, banned, connected/disconnected/rejected/connect_failed per
+    interval. Interval default 60 detik dan bisa diatur dengan
+    `BTPY_P2P_PEER_LOG_INTERVAL_SECONDS` / `p2p_peer_log_interval_seconds`;
+    detail per-peer tetap tersedia dengan `ORI_LOG_P2P=DEBUG`. Durasi koneksi
+    juga diperbaiki memakai `connected_at`, bukan `last_seen`, supaya analisis
+    churn tidak bias ke nol saat peer baru saja mengirim pesan.
 
 Verifikasi tambahan (live, HTTP sungguhan via uvicorn di WSL):
 - `miner.py` terhadap node live: 46 blok berturut, difficulty naik 16x oleh retarget
@@ -361,9 +371,11 @@ Verifikasi tambahan (live, HTTP sungguhan via uvicorn di WSL):
   pkscript/value/address: null`, utxo berflag `coinbase`/`mature`.
 - **Hardening 2026-08-21**: `python -m py_compile utils.py block.py tx.py p2p.py
   node.py chain.py mempool.py api.py config.py` PASS; `python -m pytest -q` PASS
-  (9 tests). Test baru mencakup public API mutation fail-closed, header hex
+  (11 tests). Test baru mencakup public API mutation fail-closed, header hex
   round-trip 80 byte, rejection chain mempool yang melewati `MAX_ANCESTORS`, dan
-  rejection header batch yang tidak connect ke requested locator.
+  rejection header batch yang tidak connect ke requested locator. Test tambahan
+  memastikan default `Config.from_env()` untuk `api_host` konsisten `0.0.0.0`
+  dan lifecycle peer tidak lagi masuk `INFO` per koneksi normal.
 - **Miner optimization 2026-08-21**: `python -m py_compile miner.py` PASS; smoke
   multiprocessing lokal menemukan block valid pada target mudah; test regresi
   miner mencakup block valid, API token header, dan external cancel.
