@@ -19,7 +19,7 @@ def _read_config_file(path: str | None):
 @dataclass
 class Config:
     data_dir: str = "data"
-    api_host: str = "127.0.0.1"
+    api_host: str = "0.0.0.0"
     api_port: int = 8000
     p2p_host: str = "0.0.0.0"
     p2p_port: int = 8033

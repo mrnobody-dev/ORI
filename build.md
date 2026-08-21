@@ -192,6 +192,12 @@ python wallet.py balance ADDRESS --node http://127.0.0.1:8000
 
 # Miner terpisah (proses sendiri, tidak di node)
 python miner.py --node http://127.0.0.1:8000 --address ADDRESS --threads 4
+# Jika API node dibuka public dan protected endpoint butuh token:
+BTPY_API_TOKEN=... python miner.py --node http://HOST:8000 --address ADDRESS --threads 4
+
+# Tuning mining CPU:
+python miner.py --node http://127.0.0.1:8000 --address ADDRESS \
+  --threads 4 --batch 65536 --kernel auto --refresh 30
 
 # Kirim (dalam sats)
 python wallet.py send --node http://127.0.0.1:8000 --from NAMA_WALLET --to ADDRESS --amount 1000000
@@ -326,6 +332,15 @@ Hardening tambahan 2026-08-21:
     blok = sekitar 24 jam), atau header chain PoW-contiguous memverifikasi burial
     tersebut. Jika hash tidak cocok, node validasi penuh; ini bukan checkpoint
     konsensus dan tidak memaksa chain.
+28. **Miner CPU optimization 2026-08-21**: `miner.py` diubah ke multiprocessing
+    worker dengan pembagian nonce chunk contiguous (`--batch`, default 65.536),
+    shared counter `RawArray` tanpa stats queue, result queue hanya untuk nonce
+    pemenang, target compare langsung `digest <= target_bytes`, dan dua kernel
+    hashing portable: `full` (mutasi bytearray header 80 byte + `pack_into`) dan
+    `midstate` (`hashlib.sha256().copy()` setelah static 76 byte). Mode `auto`
+    benchmark singkat per template dan memilih kernel tercepat di mesin lokal.
+    Miner juga mendukung `--api-token` / `BTPY_API_TOKEN` untuk endpoint mining
+    yang protected saat API bind public.
 
 Verifikasi tambahan (live, HTTP sungguhan via uvicorn di WSL):
 - `miner.py` terhadap node live: 46 blok berturut, difficulty naik 16x oleh retarget
@@ -346,9 +361,12 @@ Verifikasi tambahan (live, HTTP sungguhan via uvicorn di WSL):
   pkscript/value/address: null`, utxo berflag `coinbase`/`mature`.
 - **Hardening 2026-08-21**: `python -m py_compile utils.py block.py tx.py p2p.py
   node.py chain.py mempool.py api.py config.py` PASS; `python -m pytest -q` PASS
-  (6 tests). Test baru mencakup public API mutation fail-closed, header hex
+  (9 tests). Test baru mencakup public API mutation fail-closed, header hex
   round-trip 80 byte, rejection chain mempool yang melewati `MAX_ANCESTORS`, dan
   rejection header batch yang tidak connect ke requested locator.
+- **Miner optimization 2026-08-21**: `python -m py_compile miner.py` PASS; smoke
+  multiprocessing lokal menemukan block valid pada target mudah; test regresi
+  miner mencakup block valid, API token header, dan external cancel.
 
 ## 8. TODO / Pekerjaan Berikutnya
 
