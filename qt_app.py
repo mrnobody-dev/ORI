@@ -2,6 +2,7 @@
 """ORI Core — Bitcoin-Qt style wallet + full node (no mining)."""
 
 import argparse
+import ctypes
 import os
 import sys
 
@@ -15,6 +16,59 @@ from qt.splash import BootThread, Splash
 from qt.theme import QSS, apply_theme, load_dark_pref
 from qt.wallet_dialogs import NewWalletCreatedDialog, UnlockWalletDialog
 from wallet import DEFAULT_WALLET, wallet_is_encrypted
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information, False, int(pid)
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _lock_owner_pid(lock_file: str) -> int | None:
+    try:
+        with open(lock_file, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _acquire_datadir_lock(lock_file: str):
+    if os.path.exists(lock_file):
+        pid = _lock_owner_pid(lock_file)
+        if pid is not None and _pid_is_running(pid):
+            raise RuntimeError(
+                f"A lock file was found at:\n{lock_file}\n\n"
+                f"It belongs to running process PID {pid}. Close that ORI Core "
+                "instance first, or choose a different data directory."
+            )
+        try:
+            os.remove(lock_file)
+        except OSError as exc:
+            raise RuntimeError(
+                f"A stale lock file was found at:\n{lock_file}\n\n"
+                f"ORI Core could not remove it automatically: {exc}"
+            ) from exc
+    with open(lock_file, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
 
 
 def parse_args(argv):
@@ -52,16 +106,11 @@ def main(argv=None):
     cfg = Config.from_env()
     os.makedirs(cfg.data_dir, exist_ok=True)
     lock_file = os.path.join(cfg.data_dir, ".lock")
-    if os.path.exists(lock_file):
-        QMessageBox.critical(None, "ORI Core Already Running", 
-                             f"A lock file was found at:\n{lock_file}\n\n"
-                             "This usually means another instance of ORI Core is already running "
-                             "on this data directory. Please close it first, or delete the lock file "
-                             "if you are sure it is not running.")
+    try:
+        _acquire_datadir_lock(lock_file)
+    except RuntimeError as exc:
+        QMessageBox.critical(None, "ORI Core Already Running", str(exc))
         sys.exit(1)
-    
-    with open(lock_file, "w") as f:
-        f.write(str(os.getpid()))
 
     controller = NodeController(cfg, wallet_path=args.wallet)
 
@@ -125,13 +174,16 @@ def main(argv=None):
     boot.finished.connect(on_boot_finished)
     boot.start()
     
-    ret = app.exec()
-    if os.path.exists(lock_file):
-        try:
-            os.remove(lock_file)
-        except OSError:
-            pass
-    return ret
+    try:
+        ret = app.exec()
+        return ret
+    finally:
+        controller.shutdown()
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

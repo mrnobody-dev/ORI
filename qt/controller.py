@@ -320,6 +320,9 @@ class NodeController(QObject):
         last_time = last_row["timestamp"] if last_row else 0
         name, info = self.default_account()
         mempool = node.mempool.to_json()
+        api_display_host = node.cfg.api_host
+        if api_display_host in ("0.0.0.0", "::", ""):
+            api_display_host = "127.0.0.1"
         return {
             "version": VERSION,
             "coin": node.cfg.coin_name,
@@ -341,7 +344,7 @@ class NodeController(QObject):
             "api_port": node.cfg.api_port,
             "api_host": node.cfg.api_host,
             "api_ready": self._api_server is not None,
-            "api_url": f"http://{node.cfg.api_host}:{node.cfg.api_port}/docs"
+            "api_url": f"http://{api_display_host}:{node.cfg.api_port}/docs"
             if self._api_server is not None
             else "",
             "data_dir": os.path.abspath(node.cfg.data_dir),

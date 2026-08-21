@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from api import VERSION
 from qt.controller import format_time
+from qt.icons import history_icon
 from wallet import WalletError, format_ori
 
 
@@ -52,6 +53,8 @@ def _separator():
 class TxDetailDialog(QDialog):
     def __init__(self, controller, txid: str, parent=None):
         super().__init__(parent)
+        self.controller = controller
+        self.txid = txid
         self.setWindowTitle("Transaction Details")
         self.setMinimumWidth(600)
         self.setMinimumHeight(420)
@@ -78,7 +81,7 @@ class TxDetailDialog(QDialog):
         elif confs <= 0:
             status_text = "🔄  Confirming…"
             status_color = "#E67E22"
-        elif tx_type == "generate" and confs < 100:
+        elif tx_type in ("generate", "immature") and confs < controller.node.cfg.coinbase_maturity:
             status_text = f"⛏  Mined — {confs} confirmation(s), immature"
             status_color = "#2980B9"
         else:
@@ -111,7 +114,7 @@ class TxDetailDialog(QDialog):
 
             if not d.get("replaced"):
                 self.bump_btn = QPushButton("Bump Fee (RBF)")
-                self.bump_btn.setIcon(QIcon("qt/assets/icons/transaction.png"))  # placeholder
+                self.bump_btn.setIcon(history_icon(16))
                 self.bump_btn.setStyleSheet("background-color: #F39C12; color: white;")
                 self.bump_btn.clicked.connect(self._bump_fee)
                 layout.addWidget(self.bump_btn)
@@ -183,6 +186,24 @@ class TxDetailDialog(QDialog):
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+
+    def _bump_fee(self):
+        dlg = BumpFeeDialog(self.txid, parent=self)
+        if not dlg.exec():
+            return
+        try:
+            result = self.controller.bump_fee(self.txid, dlg.new_tier())
+        except Exception as exc:
+            QMessageBox.critical(self, "Bump Fee Error", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Bump Fee",
+            "Replacement transaction submitted.\n\n"
+            f"Old txid: {result.get('old_txid')}\n"
+            f"New txid: {result.get('new_txid')}",
+        )
+        self.accept()
 
 
 def _format_eta(seconds: int) -> str:
@@ -504,35 +525,37 @@ class ConsoleDialog(QDialog):
                 self._append_html(str(node.chain.storage.height()))
             elif op == "getblock":
                 if not args:
-                    self._append_html('<span style="color:#E74C3C">Usage: getblock &lt;hash&gt;</span>')
+                    self._append_html('<span style="color:#E74C3C">Usage: getblock &lt;height|hash&gt;</span>')
                 else:
-                    blk = node.chain.storage.block_by_hash(args[0])
+                    arg = args[0]
+                    if arg.isdigit():
+                        height = int(arg)
+                        blk = node.chain.block_at(height)
+                    else:
+                        blk = node.chain.block_by_hash(arg)
+                        height = node.chain.storage.chain_height_of(arg)
                     if blk:
-                        self._append_html(f"<pre>{json.dumps(blk, indent=2)}</pre>")
+                        self._append_html(f"<pre>{json.dumps(blk.to_dict(height), indent=2)}</pre>")
                     else:
                         self._append_html('<span style="color:#E74C3C">Block not found</span>')
             elif op == "getblockhash":
                 if not args:
                     self._append_html('<span style="color:#E74C3C">Usage: getblockhash &lt;height&gt;</span>')
                 else:
-                    h = node.chain.storage.get_hash_by_height(int(args[0]))
-                    if h:
-                        self._append_html(h)
+                    row = node.chain.storage.block_by_height(int(args[0]))
+                    if row:
+                        self._append_html(row["hash"])
                     else:
                         self._append_html('<span style="color:#E74C3C">Height out of bounds</span>')
             elif op == "getrawmempool":
-                self._append_html(f"<pre>{json.dumps(node.mempool.txids(), indent=2)}</pre>")
+                self._append_html(f"<pre>{json.dumps([txid.hex() for txid in node.mempool.txids()], indent=2)}</pre>")
             elif op == "getpeerinfo":
                 peers = [{"ip": p.addr[0], "port": p.addr[1], "user_agent": p.ua} for p in node.network.peers.values()]
                 self._append_html(f"<pre>{json.dumps(peers, indent=2)}</pre>")
             elif op == "getblocktime":
                 self._append_html(str(node.cfg.block_time_seconds))
             elif op == "getsupply":
-                base = 50 * 100_000_000
-                total = 0
-                for h in range(1, node.chain.storage.height() + 1):
-                    total += base >> (h // node.cfg.halving_interval)
-                self._append_html(str(total))
+                self._append_html(str(node.chain.utxo.total_supply()))
             elif op == "getutxo":
                 if len(args) != 2:
                     self._append_html('<span style="color:#E74C3C">Usage: getutxo &lt;txid&gt; &lt;vout&gt;</span>')
@@ -546,10 +569,12 @@ class ConsoleDialog(QDialog):
                         res = {"height": height, "value_sats": amt, "address": addr, "coinbase": cb}
                         self._append_html(f"<pre>{json.dumps(res, indent=2)}</pre>")
             elif op == "getdifficulty":
-                h = node.chain.storage.tip_hash()
-                parent = node.chain.storage.block_by_hash(h)
-                bits = parent["bits"] if parent else node.cfg.genesis_bits
-                self._append_html(hex(bits))
+                tip = node.chain.tip()
+                self._append_html(json.dumps({
+                    "bits": hex(tip["bits"]),
+                    "difficulty": tip.get("difficulty"),
+                    "next_bits": hex(node.chain.next_bits()),
+                }, indent=2))
             elif op == "sendrawtransaction":
                 if not args:
                     self._append_html('<span style="color:#E74C3C">Usage: sendrawtransaction &lt;hex&gt;</span>')
@@ -566,8 +591,31 @@ class ConsoleDialog(QDialog):
                     from tx import Transaction
                     try:
                         tx = Transaction.from_hex(args[0])
-                        from api import _tx_to_dict
-                        self._append_html(f"<pre>{json.dumps(_tx_to_dict(tx), indent=2)}</pre>")
+                        decoded = {
+                            "txid": tx.txid().hex(),
+                            "version": tx.version,
+                            "locktime": tx.locktime,
+                            "coinbase": tx.is_coinbase(),
+                            "size": len(tx.serialize()),
+                            "inputs": [
+                                {
+                                    "prev_txid": txin.prev_txid.hex(),
+                                    "prev_vout": txin.prev_vout,
+                                    "sequence": txin.sequence,
+                                    "sigscript": txin.script_sig.hex(),
+                                }
+                                for txin in tx.inputs
+                            ],
+                            "outputs": [
+                                {
+                                    "vout": idx,
+                                    "value": out.value,
+                                    "script_pubkey": out.script_pubkey.decode(errors="replace"),
+                                }
+                                for idx, out in enumerate(tx.outputs)
+                            ],
+                        }
+                        self._append_html(f"<pre>{json.dumps(decoded, indent=2)}</pre>")
                     except Exception as e:
                         self._append_html(f'<span style="color:#E74C3C">Decode failed: {e}</span>')
             elif op == "listunspent":
