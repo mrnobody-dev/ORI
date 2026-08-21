@@ -60,6 +60,8 @@ class Config:
     )
     min_relay_fee_per_vb: float = 0.28
     api_token: str = ""
+    assume_valid_block: str = ""
+    assume_valid_height: int = 0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -125,4 +127,6 @@ class Config:
             ),
             max_mempool_txs=int(_env_or_file("BTPY_MAX_MEMPOOL_TXS", "max_mempool_txs", "100000")),
             api_token=str(_env_or_file("BTPY_API_TOKEN", "api_token", "")),
+            assume_valid_block=str(_env_or_file("BTPY_ASSUME_VALID_BLOCK", "assume_valid_block", "")),
+            assume_valid_height=int(_env_or_file("BTPY_ASSUME_VALID_HEIGHT", "assume_valid_height", "0")),
         )

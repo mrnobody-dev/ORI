@@ -1,4 +1,13 @@
 import threading
+import math
+from collections import defaultdict, deque
+
+
+# Cluster Mempool Constants (Bitcoin Core 28.0+ compatible)
+MAX_ANCESTORS = 25
+MAX_DESCENDANTS = 25
+MAX_ANCESTOR_SIZE = 101 * 1000  # 101 kVBytes
+MAX_DESCENDANT_SIZE = 101 * 1000  # 101 kVBytes
 
 
 class Mempool:
@@ -8,6 +17,18 @@ class Mempool:
         self._fees = {}
         self._inputs = {}
         self._lock = threading.RLock()
+        
+        # Cluster mempool state
+        self._clusters = {}  # txid -> cluster_id
+        self._cluster_txs = defaultdict(set)  # cluster_id -> {txid}
+        self._cluster_fee = defaultdict(int)  # cluster_id -> total_fee
+        self._cluster_size = defaultdict(int)  # cluster_id -> total_vbytes
+        self._next_cluster_id = 1
+        
+        # Ancestor/descendant tracking
+        self._ancestors = defaultdict(set)  # txid -> set of ancestor txids
+        self._descendants = defaultdict(set)  # txid -> set of descendant txids
+        self._tx_sizes = {}  # txid -> vsize
 
     # ── read-only queries (still locked for consistency) ─────────────────
 
@@ -62,18 +83,186 @@ class Mempool:
             txid = tx.txid()
             if txid in self._txs:
                 return False
+            
+            # Check input conflicts
             for txin in tx.inputs:
                 if txin.prev_txid == b"\x00" * 32:
                     continue
                 key = (txin.prev_txid, txin.prev_vout)
                 if key in self._inputs:
                     return False
+            
+            # Compute ancestors and descendants
+            ancestors = self._get_ancestors_locked(txid)
+            descendants = self._get_descendants_locked(txid)
+            
+            # Check ancestor/descendant count limits
+            if len(ancestors) >= MAX_ANCESTORS:
+                return False
+            if len(descendants) >= MAX_DESCENDANTS:
+                return False
+            
+            # Check ancestor/descendant size limits (including this tx)
+            vsize = self._tx_vsize(tx)
+            ancestor_size = sum(self._tx_sizes.get(a, 0) for a in ancestors) + vsize
+            descendant_size = sum(self._tx_sizes.get(d, 0) for d in descendants) + vsize
+            
+            if ancestor_size > MAX_ANCESTOR_SIZE:
+                return False
+            if descendant_size > MAX_DESCENDANT_SIZE:
+                return False
+            
+            # Add to mempool
             self._txs[txid] = tx
             self._fees[txid] = fee
+            self._tx_sizes[txid] = vsize
             for txin in tx.inputs:
                 if txin.prev_txid != b"\x00" * 32:
                     self._inputs[(txin.prev_txid, txin.prev_vout)] = txid
+            
+            # Update ancestor/descendant tracking
+            self._update_ancestry_locked(txid, ancestors, descendants)
+            
+            # Create/merge cluster
+            self._create_or_merge_cluster_locked(txid, ancestors, descendants)
+            
             return True
+    
+    def _tx_vsize(self, tx) -> int:
+        """Virtual size of transaction."""
+        return len(tx.serialize())
+    
+    def _get_ancestors_locked(self, txid: bytes) -> set:
+        """Get all ancestors of a tx in mempool (excluding itself)."""
+        ancestors = set()
+        visited = set()
+        queue = deque()
+        
+        # Find direct parents
+        tx = self._txs.get(txid)
+        if tx:
+            for txin in tx.inputs:
+                if txin.prev_txid == b"\x00" * 32:
+                    continue
+                key = (txin.prev_txid, txin.prev_vout)
+                parent_txid = self._inputs.get(key)
+                if parent_txid and parent_txid != txid:
+                    queue.append(parent_txid)
+        
+        while queue:
+            cur = queue.popleft()
+            if cur in visited:
+                continue
+            visited.add(cur)
+            ancestors.add(cur)
+            
+            # Add cur's parents to queue
+            parent_tx = self._txs.get(cur)
+            if parent_tx:
+                for txin in parent_tx.inputs:
+                    if txin.prev_txid == b"\x00" * 32:
+                        continue
+                    key = (txin.prev_txid, txin.prev_vout)
+                    pp = self._inputs.get(key)
+                    if pp and pp not in visited:
+                        queue.append(pp)
+        
+        return ancestors
+    
+    def _get_descendants_locked(self, txid: bytes) -> set:
+        """Get all descendants of a tx in mempool (excluding itself)."""
+        descendants = set()
+        # Build reverse index
+        children = defaultdict(set)
+        for t in self._txs:
+            ptx = self._txs[t]
+            for txin in ptx.inputs:
+                if txin.prev_txid == b"\x00" * 32:
+                    continue
+                key = (txin.prev_txid, txin.prev_vout)
+                parent = self._inputs.get(key)
+                if parent:
+                    children[parent].add(t)
+        
+        # BFS from txid
+        queue = deque([txid])
+        while queue:
+            cur = queue.popleft()
+            for child in children.get(cur, []):
+                if child not in descendants and child != txid:
+                    descendants.add(child)
+                    queue.append(child)
+        
+        return descendants
+    
+    def _update_ancestry_locked(self, txid: bytes, ancestors: set, descendants: set):
+        """Update ancestor/descendant tracking for new tx."""
+        # This tx's ancestors include itself for descendant tracking
+        all_ancestors = ancestors | {txid}
+        
+        # Update descendants of all ancestors to include this tx
+        for a in all_ancestors:
+            self._descendants[a].add(txid)
+        
+        # Update ancestors of all descendants to include this tx
+        for d in descendants:
+            self._ancestors[d].update(all_ancestors)
+        
+        # Set this tx's ancestors and descendants
+        self._ancestors[txid] = ancestors.copy()
+        self._descendants[txid] = descendants.copy()
+    
+    def _create_or_merge_cluster_locked(self, txid: bytes, ancestors: set, descendants: set):
+        """Create new cluster or merge existing clusters for the new tx and its family."""
+        all_related = ancestors | descendants | {txid}
+        
+        # Find existing cluster IDs
+        cluster_ids = set()
+        for t in all_related:
+            cid = self._clusters.get(t)
+            if cid is not None:
+                cluster_ids.add(cid)
+        
+        if not cluster_ids:
+            # New cluster
+            cid = self._next_cluster_id
+            self._next_cluster_id += 1
+        else:
+            # Merge into smallest cluster ID
+            cid = min(cluster_ids)
+            for other_cid in cluster_ids:
+                if other_cid != cid:
+                    self._merge_clusters_locked(cid, other_cid)
+        
+        # Assign all related txs to this cluster
+        for t in all_related:
+            old_cid = self._clusters.get(t)
+            if old_cid is not None and old_cid != cid:
+                self._cluster_txs[old_cid].discard(t)
+                self._recalc_cluster_locked(old_cid)
+            self._clusters[t] = cid
+            self._cluster_txs[cid].add(t)
+        
+        self._recalc_cluster_locked(cid)
+    
+    def _merge_clusters_locked(self, keep_cid: int, merge_cid: int):
+        """Merge merge_cid into keep_cid."""
+        for t in list(self._cluster_txs[merge_cid]):
+            self._clusters[t] = keep_cid
+            self._cluster_txs[keep_cid].add(t)
+        self._cluster_txs[merge_cid].clear()
+        self._recalc_cluster_locked(keep_cid)
+        self._recalc_cluster_locked(merge_cid)
+    
+    def _recalc_cluster_locked(self, cid: int):
+        """Recalculate cluster fee and size."""
+        fee = 0
+        size = 0
+        for t in self._cluster_txs[cid]:
+            fee += self._fees.get(t, 0)
+            size += self._tx_sizes.get(t, 0)
+        self._cluster_fee[cid] = fee
+        self._cluster_size[cid] = size
 
     def replace(self, old_txid: bytes, new_tx, new_fee: int, min_relay_fee_per_vb: float = 0.28) -> bool:
         """RBF: replace old_txid with new_tx if new_fee is sufficiently higher.
@@ -133,9 +322,26 @@ class Mempool:
         if tx is None:
             return
         self._fees.pop(txid, None)
+        self._tx_sizes.pop(txid, None)
         for txin in tx.inputs:
             if txin.prev_txid != b"\x00" * 32:
                 self._inputs.pop((txin.prev_txid, txin.prev_vout), None)
+        
+        # Clean up cluster tracking
+        cid = self._clusters.pop(txid, None)
+        if cid is not None:
+            self._cluster_txs[cid].discard(txid)
+            self._recalc_cluster_locked(cid)
+        
+        # Clean up ancestry tracking
+        # Remove this tx from its ancestors' descendants
+        for a in self._ancestors.get(txid, set()):
+            self._descendants[a].discard(txid)
+        # Remove this tx from its descendants' ancestors
+        for d in self._descendants.get(txid, set()):
+            self._ancestors[d].discard(txid)
+        self._ancestors.pop(txid, None)
+        self._descendants.pop(txid, None)
 
     def remove_spent(self, block_txs: list):
         with self._lock:

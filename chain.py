@@ -179,7 +179,7 @@ class Blockchain:
             return height > tx.locktime
         return block_time > tx.locktime
 
-    def validate_tx(self, tx, utxo, height=None, block_time=None):
+    def validate_tx(self, tx, utxo, height=None, block_time=None, assume_valid=False):
         if tx.is_coinbase():
             return False, "coinbase in wrong position", 0
         if not tx.inputs:
@@ -211,21 +211,27 @@ class Blockchain:
                 and out_height + self.cfg.coinbase_maturity > height
             ):
                 return False, "coinbase output not mature", 0
-            script = txin.script_sig
-            if len(script) < 65 or len(script) > 16_384:
-                return False, "bad unlocking script size", 0
-            sig, pub = script[:64], script[64:]
-            if (
-                height is not None
-                and height >= self.cfg.low_s_activation_height
-                and not sig_is_low_s(sig)
-            ):
-                return False, "high-S signature", 0
-            expected = pub_to_address(pub, self.cfg)
-            if expected != address:
-                return False, "payer address mismatch", 0
-            if not verify(pub, tx.sighash(), sig):
-                return False, "invalid signature", 0
+            if not assume_valid:
+                script = txin.script_sig
+                if len(script) < 65 or len(script) > 16_384:
+                    return False, "bad unlocking script size", 0
+                sig, pub = script[:64], script[64:]
+                if (
+                    height is not None
+                    and height >= self.cfg.low_s_activation_height
+                    and not sig_is_low_s(sig)
+                ):
+                    return False, "high-S signature", 0
+                expected = pub_to_address(pub, self.cfg)
+                if expected != address:
+                    return False, "payer address mismatch", 0
+                if not verify(pub, tx.sighash(), sig):
+                    return False, "invalid signature", 0
+            else:
+                # AssumeValid: still check script size and structure
+                script = txin.script_sig
+                if len(script) < 65 or len(script) > 16_384:
+                    return False, "bad unlocking script size", 0
             total_in += value
         total_out = sum(o.value for o in tx.outputs)
         if total_out > total_in:
@@ -256,8 +262,12 @@ class Blockchain:
         base = self.cfg.block_reward_sats >> (height // self.cfg.halving_interval)
         total_fees = 0
         block_time = block.header.timestamp
+        
+        # AssumeValid: skip script verification for blocks at or below assume_valid_height
+        assume_valid = (self.cfg.assume_valid_height > 0 and height <= self.cfg.assume_valid_height)
+        
         for tx in block.transactions[1:]:
-            ok, reason, fee = self.validate_tx(tx, utxo, height, block_time)
+            ok, reason, fee = self.validate_tx(tx, utxo, height, block_time, assume_valid=assume_valid)
             if not ok:
                 return False, "invalid tx: " + reason, 0
             total_fees += fee
