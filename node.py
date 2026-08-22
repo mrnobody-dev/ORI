@@ -314,8 +314,12 @@ class Node:
             peer.height = max(peer.height, height)
         if ok:
             self.network.broadcast_inv("block", block_hash, exclude=peer)
-        if height is not None and height < peer.height and len(peer.requested) < 100:
-            self.network.request_blocks_from(peer)
+        # Continue syncing until the peer's tip. The old condition
+        # (height < peer.height) was dead code after the LAST block of a
+        # batch — it compared against the just-updated max, so bulk sync
+        # stalled after one window and nodes crawled at live-block speed.
+        if ok and height is not None and peer.height is not None:
+            self.network.schedule_sync_follow_up(peer)
 
     def _revalidate_mempool(self):
         for tx in list(self.mempool.txids()):

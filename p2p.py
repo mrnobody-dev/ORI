@@ -10,6 +10,7 @@ from block import Block, BlockHeader
 from pow import hash_meets_target
 
 CMD_SIZE = 12
+GETDATA_BATCH = 64
 
 # P2P DoS Protection Constants
 MSG_TOKEN_REFILL_RATE = 10.0      # tokens per second
@@ -985,6 +986,46 @@ class Network:
         payload = json.dumps({"items": [{"type": kind, "hash": item_hash}]}).encode()
         self.broadcast("inv", payload, exclude)
 
+    def schedule_sync_follow_up(self, peer: Peer):
+        """Keep asking for more blocks until we reach the peer's tip.
+
+        This is the continuation loop Bitcoin Core has after every connected
+        batch: without it the node downloads exactly ONE window (500 inv items
+        or one headers batch) and then goes silent, crawling at live-block
+        speed. Debounced so an in-flight window is never double-requested.
+        """
+        if not self._running:
+            return
+        if getattr(peer, "_sync_follow_scheduled", False):
+            return
+        try:
+            if peer.height is None or self.node.chain.storage.height() >= peer.height:
+                return
+        except Exception:
+            return
+        peer._sync_follow_scheduled = True
+
+        def _fire():
+            try:
+                peer._sync_follow_scheduled = False
+                if not self._running or not peer._alive:
+                    return
+                if not getattr(peer, "handshake_complete", False):
+                    return
+                local = self.node.chain.storage.height()
+                if local < peer.height:
+                    logger.debug(LogCategory.P2P, "Sync follow-up request",
+                                peer=_peer_label(peer.addr),
+                                local_height=local,
+                                peer_height=peer.height)
+                    self.request_blocks_from(peer)
+            except Exception:
+                pass
+
+        t = threading.Timer(0.3, _fire)
+        t.daemon = True
+        t.start()
+
     def request_blocks_from(self, peer: Peer, from_hash: str = None):
         node = self.node
         data = {
@@ -1121,22 +1162,45 @@ class Network:
         if not valid_headers:
             return
         chain.mark_assume_valid_headers(first_height, all_header_hashes)
-        logger.info(LogCategory.SYNC, "Accepted header batch", peer=_peer_label(peer.addr), count=len(valid_headers))
+        logger.info(LogCategory.SYNC, "Accepted header batch",
+                    peer=_peer_label(peer.addr), count=len(valid_headers))
         # Request blocks in parallel from multiple peers
         self._request_blocks_parallel(valid_headers)
+        # Window-boundary safety: if this headers batch ended below the
+        # peer's advertised tip, keep the pipeline moving even if every
+        # block in the window turns out to be already-known.
+        self.schedule_sync_follow_up(peer)
 
     def _request_blocks_parallel(self, headers: list):
-        """Request blocks from multiple peers in parallel."""
+        """Request blocks for verified headers, batched per peer.
+
+        One getdata message carries up to GETDATA_BATCH hashes — sending one
+        message per hash wastes a round-trip and trips peer framing limits at
+        2000-header windows.
+        """
         with self._lock:
             peers = [p for p in self.peers.values() if p.handshake_complete]
         if not peers:
             return
-        
-        # Distribute blocks across peers (round-robin)
-        for i, (block_hash, header) in enumerate(headers):
-            peer = peers[i % len(peers)]
-            if peer._alive:
-                self.request_block(peer, block_hash)
+
+        buckets = [[] for _ in peers]
+        for i, (block_hash, _header) in enumerate(headers):
+            buckets[i % len(peers)].append(block_hash)
+
+        for bucket in buckets:
+            for start in range(0, len(bucket), GETDATA_BATCH):
+                chunk = bucket[start : start + GETDATA_BATCH]
+                peer = peers[buckets.index(bucket) % len(peers)]
+                if not peer._alive:
+                    continue
+                items = [{"type": "block", "hash": h} for h in chunk]
+                try:
+                    peer.send(
+                        "getdata",
+                        json.dumps({"items": items}).encode(),
+                    )
+                except Exception:
+                    continue
 
     def reply_item(self, peer: Peer, item: dict):
         node = self.node
