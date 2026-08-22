@@ -94,9 +94,18 @@ class Peer(threading.Thread):
         self._ping_sent_at = None
         self._hb_log_at = now()
         
-        # Rate limiting (token bucket)
-        self._msg_tokens = self.network.cfg.p2p_msg_token_bucket
-        self._msg_tokens_last = now()
+        # Rate limiting (token bucket).
+        # Invariant: bucket MUST fit at least 2 max-size messages, otherwise a
+        # single legitimate `block`/`headers` payload trips the limiter and
+        # kills IBD. Enforce a floor derived from cfg.max_msg_bytes.
+        _cost_per_kb = max(0.01, self.network.cfg.p2p_msg_token_cost_per_kb)
+        _min_bucket = (self.network.cfg.max_msg_bytes / 1024.0) * _cost_per_kb * 2.0
+        self._bucket = max(float(self.network.cfg.p2p_msg_token_bucket), _min_bucket)
+        # Sustained throughput floor: >= 512 KB/s so real block relay is never
+        # starved; config may raise it but not lower it below this.
+        self._refill = max(float(self.network.cfg.p2p_msg_token_refill_rate), 512.0)
+        self._msg_tokens = self._bucket
+        self._msg_tokens_last = time.monotonic()
         
         # Ban score
         self.ban_score = 0
@@ -125,20 +134,29 @@ class Peer(threading.Thread):
             return f"dns:{host.lower()}"
     
     def _consume_msg_tokens(self, payload_bytes: int) -> bool:
-        """Token bucket rate limiting. Returns True if allowed."""
-        now_ts = now()
-        elapsed = now_ts - self._msg_tokens_last
-        self._msg_tokens = min(
-            self.network.cfg.p2p_msg_token_bucket,
-            self._msg_tokens + elapsed * self.network.cfg.p2p_msg_token_refill_rate,
+        """Token bucket bandwidth pacing.
+
+        Bitcoin Core philosophy: bandwidth is THROTTLED (backpressure), never a
+        hard disconnect. A slow-wait here only delays dispatch of this one
+        message; TCP backpressure handles the rest. Returns False only when the
+        caller should drop this single message — no ban score involved.
+        """
+        cost = (payload_bytes / 1024.0) * max(
+            0.01, self.network.cfg.p2p_msg_token_cost_per_kb
         )
-        self._msg_tokens_last = now_ts
-        
-        cost = (payload_bytes / 1024.0) * self.network.cfg.p2p_msg_token_cost_per_kb
-        if self._msg_tokens >= cost:
-            self._msg_tokens -= cost
-            return True
-        return False
+        deadline = time.monotonic() + 10.0
+        while True:
+            now_ts = time.monotonic()
+            elapsed = max(0.0, now_ts - self._msg_tokens_last)
+            self._msg_tokens = min(self._bucket, self._msg_tokens + elapsed * self._refill)
+            self._msg_tokens_last = now_ts
+            if self._msg_tokens >= cost:
+                self._msg_tokens -= cost
+                return True
+            if now_ts >= deadline:
+                return False
+            deficit = cost - self._msg_tokens
+            time.sleep(min(0.25, deficit / self._refill))
     
     def _add_ban_score(self, reason: str):
         """Add ban score and check threshold."""
@@ -175,14 +193,18 @@ class Peer(threading.Thread):
         return False
     
     def _track_bytes_received(self, payload_bytes: int):
-        """Track bytes received for rate limiting."""
+        """Observability only — high-throughput IBD is legitimate traffic.
+        Abuse is handled by the token bucket (pacing) and by hard protocol
+        validation (PoW/merkle/framing), never by byte-count bans."""
         now_ts = now()
         if now_ts - self._bytes_recv_last_minute > 60:
             self._bytes_recv = 0
             self._bytes_recv_last_minute = now_ts
         self._bytes_recv += payload_bytes
         if self._bytes_recv > self.network.cfg.p2p_max_bytes_per_minute:
-            self._add_ban_score("large_message")
+            logger.debug(LogCategory.P2P, "High ingress from peer",
+                        peer=_peer_label(self.addr),
+                        bytes_per_min=self._bytes_recv)
 
     def run(self):
         try:
@@ -232,11 +254,16 @@ class Peer(threading.Thread):
                 break
             cmd, payload = msg
             
-            # Rate limiting: check token bucket
+            # Bandwidth pacing: if the bucket is still starved after a bounded
+            # wait, skip THIS message (keep connection alive). Never ban or
+            # disconnect for bandwidth — that broke IBD against fast peers.
             if not self._consume_msg_tokens(len(payload)):
-                self._add_ban_score("protocol_violation")
-                self.disconnect_reason = "rate limit exceeded"
-                break
+                self.disconnect_reason = ""
+                logger.debug(LogCategory.P2P, "Message dropped by pacing",
+                            peer=_peer_label(self.addr),
+                            msg_type="unknown",
+                            bytes=len(payload))
+                continue
             
             # Track bytes received
             self._track_bytes_received(len(payload))
@@ -477,6 +504,11 @@ class Network:
         self._peer_event_counts = defaultdict(int)
         self._peer_event_last_at = now()
         self._peer_failures = deque(maxlen=20)
+        # addr -> monotonic time when the next attempt is allowed.
+        # Exponential backoff for unreachable endpoints so a dead Railway
+        # proxy (WinError 10061) is retried politely instead of hammered.
+        self._connect_backoff = {}
+        self._connect_fails = {}
     
     def _load_banned_peers(self):
         import os
@@ -634,7 +666,11 @@ class Network:
     def _connect_known(self):
         while self._running:
             with self._lock:
-                known = list(self.known)
+                now_mono = time.monotonic()
+                known = [
+                    (h, p) for (h, p) in self.known
+                    if self._connect_backoff.get((h, p), 0) <= now_mono
+                ]
             
             # Group by subnet for diversity
             by_subnet = defaultdict(list)
@@ -686,7 +722,13 @@ class Network:
             time.sleep(15)
             with self._lock:
                 targets = list(self.cfg.seed_peers) + list(self.known)
-            for host, port in targets:
+                now_mono = time.monotonic()
+                due = [
+                    (h, p) for (h, p) in targets
+                    if self._connect_backoff.get((h, p), 0) <= now_mono
+                    and (h, p) not in self.peers
+                ]
+            for host, port in due:
                 if len(self.peers) >= self.cfg.max_peers:
                     break
                 threading.Thread(target=self.connect, args=(host, port), daemon=True).start()
@@ -766,10 +808,21 @@ class Network:
             sock = socket.create_connection((host, port), timeout=10)
         except OSError as exc:
             self._outbound.discard(key)
-            logger.debug(LogCategory.P2P, "Outbound connect failed", peer=_peer_label(key), error=str(exc))
+            # Exponential backoff: 15s, 30s, 60s, ... capped at 5 min.
+            with self._lock:
+                fails = self._connect_fails.get(key, 0) + 1
+                self._connect_fails[key] = fails
+                delay = min(300.0, 15.0 * (2 ** min(fails - 1, 5)))
+                self._connect_backoff[key] = time.monotonic() + delay
+            logger.info(LogCategory.P2P, "Outbound connect failed",
+                        peer=_peer_label(key), error=str(exc),
+                        retry_in_sec=round(delay))
             self._record_peer_failure(_peer_label(key), f"connect failed: {exc}")
             self._record_peer_event("connect_failed")
             return
+        with self._lock:
+            self._connect_fails.pop(key, None)
+            self._connect_backoff.pop(key, None)
         peer = Peer(self, sock, (host, port), outbound=True)
         if self._register(peer):
             peer.start()
