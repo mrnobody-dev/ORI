@@ -135,8 +135,13 @@ class Node:
         ok, reason, fee = self.chain.validate_tx(tx, view, height)
         if not ok:
             return False, reason, None
-        if fee < math.ceil(len(tx.serialize()) * self.cfg.min_relay_fee_per_vb):
-            return False, "fee below minimum relay rate (0.28 sat/vB)", None
+        from mempool import JUMBO_TX_THRESHOLD
+        min_rate = self.cfg.min_relay_fee_per_vb
+        if len(tx.serialize()) > JUMBO_TX_THRESHOLD:
+            # Jumbo tx (massive consolidation): premium relay rate (2x)
+            min_rate *= 2
+        if fee < math.ceil(len(tx.serialize()) * min_rate):
+            return False, f"fee below minimum relay rate ({min_rate} sat/vB)", None
         added, add_reason = self.mempool.add(tx, fee)
         if not added:
             return False, add_reason, None

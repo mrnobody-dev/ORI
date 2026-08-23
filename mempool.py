@@ -7,8 +7,9 @@ from collections import defaultdict, deque
 # Cluster Mempool Constants (Bitcoin Core 28.0+ compatible)
 MAX_ANCESTORS = 25
 MAX_DESCENDANTS = 25
-MAX_ANCESTOR_SIZE = 500 * 1000  # 500 kVBytes (Allows massive consolidation)
-MAX_DESCENDANT_SIZE = 500 * 1000  # 500 kVBytes
+MAX_ANCESTOR_SIZE = 101 * 1000  # 101 kVBytes
+MAX_DESCENDANT_SIZE = 101 * 1000  # 101 kVBytes
+JUMBO_TX_THRESHOLD = 101 * 1000  # txs above this pay premium relay fee
 
 
 class Mempool:
@@ -102,10 +103,15 @@ class Mempool:
             if len(ancestors) + 1 > MAX_ANCESTORS:
                 return False, "too many unconfirmed ancestors (max 25)"
             
-            # Check ancestor/descendant size limits (including this tx)
+            # Check ancestor/descendant size limits.
+            # Jumbo txs: the tx's own size does not count against the ancestor
+            # limit (mirrors Bitcoin policy where a large tx may exceed the
+            # cluster limit as long as its unconfirmed ancestors fit); it is
+            # only bounded by the block size at template build time.
             vsize = self._tx_vsize(tx)
-            ancestor_size = sum(self._tx_sizes.get(a, 0) for a in ancestors) + vsize
-            descendant_size = sum(self._tx_sizes.get(d, 0) for d in descendants) + vsize
+            jumbo = vsize > JUMBO_TX_THRESHOLD
+            ancestor_size = sum(self._tx_sizes.get(a, 0) for a in ancestors) + (0 if jumbo else vsize)
+            descendant_size = sum(self._tx_sizes.get(d, 0) for d in descendants)
             
             if ancestor_size > MAX_ANCESTOR_SIZE:
                 return False, f"tx ancestry size limit exceeded ({ancestor_size} > {MAX_ANCESTOR_SIZE} bytes)"
