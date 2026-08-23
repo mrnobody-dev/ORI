@@ -137,8 +137,9 @@ class Node:
             return False, reason, None
         if fee < math.ceil(len(tx.serialize()) * self.cfg.min_relay_fee_per_vb):
             return False, "fee below minimum relay rate (0.28 sat/vB)", None
-        if not self.mempool.add(tx, fee):
-            return False, "mempool full or already in mempool", None
+        added, add_reason = self.mempool.add(tx, fee)
+        if not added:
+            return False, add_reason, None
         return True, "accepted", tx.txid().hex()
 
     def submit_raw_tx(self, tx_hex: str):

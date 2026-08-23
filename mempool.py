@@ -7,8 +7,8 @@ from collections import defaultdict, deque
 # Cluster Mempool Constants (Bitcoin Core 28.0+ compatible)
 MAX_ANCESTORS = 25
 MAX_DESCENDANTS = 25
-MAX_ANCESTOR_SIZE = 101 * 1000  # 101 kVBytes
-MAX_DESCENDANT_SIZE = 101 * 1000  # 101 kVBytes
+MAX_ANCESTOR_SIZE = 500 * 1000  # 500 kVBytes (Allows massive consolidation)
+MAX_DESCENDANT_SIZE = 500 * 1000  # 500 kVBytes
 
 
 class Mempool:
@@ -77,14 +77,14 @@ class Mempool:
 
     # ── write operations ──────────────────────────────────────────────────
 
-    def add(self, tx: object, fee: int) -> bool:
-        """Add tx to mempool. Returns True on success, False on rejection."""
+    def add(self, tx: object, fee: int) -> tuple[bool, str]:
+        """Add tx to mempool. Returns (True, "ok") or (False, reason)."""
         with self._lock:
             if len(self._txs) >= self.max_txs:
-                return False
+                return False, "mempool capacity reached"
             txid = tx.txid()
             if txid in self._txs:
-                return False
+                return False, "tx already in mempool"
             
             # Check input conflicts
             for txin in tx.inputs:
@@ -92,7 +92,7 @@ class Mempool:
                     continue
                 key = (txin.prev_txid, txin.prev_vout)
                 if key in self._inputs:
-                    return False
+                    return False, "input already spent by pending mempool tx"
             
             # Compute ancestry from the candidate transaction before insertion.
             ancestors = self._get_ancestors_for_tx_locked(tx)
@@ -100,7 +100,7 @@ class Mempool:
             
             # Check ancestor/descendant count limits
             if len(ancestors) + 1 > MAX_ANCESTORS:
-                return False
+                return False, "too many unconfirmed ancestors (max 25)"
             
             # Check ancestor/descendant size limits (including this tx)
             vsize = self._tx_vsize(tx)
@@ -108,10 +108,10 @@ class Mempool:
             descendant_size = sum(self._tx_sizes.get(d, 0) for d in descendants) + vsize
             
             if ancestor_size > MAX_ANCESTOR_SIZE:
-                return False
+                return False, f"tx ancestry size limit exceeded ({ancestor_size} > {MAX_ANCESTOR_SIZE} bytes)"
             for ancestor in ancestors:
                 if len(self._descendants.get(ancestor, set())) + 1 > MAX_DESCENDANTS:
-                    return False
+                    return False, "too many unconfirmed descendants (max 25)"
                 size_with_new = self._tx_sizes.get(ancestor, 0)
                 size_with_new += sum(
                     self._tx_sizes.get(d, 0)
@@ -119,7 +119,7 @@ class Mempool:
                 )
                 size_with_new += vsize
                 if size_with_new > MAX_DESCENDANT_SIZE:
-                    return False
+                    return False, "descendant size limit exceeded"
             
             # Add to mempool
             self._txs[txid] = tx
@@ -136,7 +136,7 @@ class Mempool:
             # Create/merge cluster
             self._create_or_merge_cluster_locked(txid, ancestors, descendants)
             
-            return True
+            return True, "ok"
     
     def _tx_vsize(self, tx) -> int:
         """Virtual size of transaction."""
