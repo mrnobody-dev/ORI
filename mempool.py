@@ -1,5 +1,6 @@
 import threading
 import math
+import time
 from collections import defaultdict, deque
 
 
@@ -29,6 +30,7 @@ class Mempool:
         self._ancestors = defaultdict(set)  # txid -> set of ancestor txids
         self._descendants = defaultdict(set)  # txid -> set of descendant txids
         self._tx_sizes = {}  # txid -> vsize
+        self._times = {}  # txid -> unix timestamp
 
     # ── read-only queries (still locked for consistency) ─────────────────
 
@@ -123,6 +125,7 @@ class Mempool:
             self._txs[txid] = tx
             self._fees[txid] = fee
             self._tx_sizes[txid] = vsize
+            self._times[txid] = int(time.time())
             for txin in tx.inputs:
                 if txin.prev_txid != b"\x00" * 32:
                     self._inputs[(txin.prev_txid, txin.prev_vout)] = txid
@@ -449,6 +452,7 @@ class Mempool:
                 out.append(
                     {
                         "txid": txid.hex(),
+                        "timestamp": self._times.get(txid),
                         "fee": self._fees[txid],
                         "size": len(tx.serialize()),
                         "fee_rate": round(self._rate(txid), 2),

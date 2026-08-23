@@ -90,15 +90,24 @@ def _kernel_midstate_copy(static76: bytes, target_bytes: bytes, start: int, end:
     sha256 = hashlib.sha256
     pack_into = struct.pack_into
     nonce_buf = bytearray(4)
+    
+    # Pre-calculate midstate for the first 64 bytes (one SHA256 block)
     base = sha256()
-    base.update(static76)
+    base.update(static76[:64])
+    midstate = base.copy()
+    
+    # Remaining 12 bytes from static header + 4 bytes nonce
+    tail = static76[64:76] + b"\x00\x00\x00\x00"
+    tail_ba = bytearray(tail)
+    
     nonce = start
     while nonce < end:
-        pack_into("<I", nonce_buf, 0, nonce)
-        first = base.copy()
-        first.update(nonce_buf)
-        digest = sha256(first.digest()).digest()
-        if digest <= target_bytes:
+        pack_into("<I", tail_ba, 12, nonce)
+        # Second half of first SHA256
+        h1 = midstate.copy()
+        h1.update(tail_ba)
+        # Second SHA256
+        if sha256(h1.digest()).digest() <= target_bytes:
             return nonce
         nonce += 1
     return None

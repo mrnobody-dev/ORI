@@ -6,9 +6,14 @@
 <title>ORI Explorer</title>
 <style>
 :root{
-  --accent:#0C6CF2; --accent-dark:#0C6CF2; --accent-light:#EFF6FF; --accent-lighter:#F8FAFC;
-  --bg:#F8FAFC; --panel:#FFFFFF; --border:#E2E8F0; --text:#0F172A; --muted:#64748B;
-  --link:#0C6CF2; --green:#10B981; --red:#EF4444; --pending:#F59E0B;
+  --accent:#43A047; --accent-dark:#2E7D32; --accent-light:#E8F5E9; --accent-lighter:#F1F8E9;
+  --bg:#FAFAF8; --panel:#FFFFFF; --border:#E0E0E0; --text:#212121; --muted:#757575;
+  --link:#2E7D32; --green:#2E7D32; --red:#C62828; --pending:#F9A825;
+}
+body.dark{
+  --accent:#66BB6A; --accent-dark:#A5D6A7; --accent-light:#153D1D; --accent-lighter:#102B16;
+  --bg:#07130A; --panel:#0D1F11; --border:#1F3D25; --text:#DFF5E3; --muted:#9AB3A0;
+  --link:#A5D6A7; --green:#81C784; --red:#EF9A9A; --pending:#FFD54F;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
@@ -62,6 +67,9 @@ tr:hover td{background:var(--accent-lighter)}
 footer{color:var(--muted);font-size:12px;text-align:center;padding:24px}
 footer a{color:var(--accent-dark)}
 .hl{background:#FFF9C4}
+.tx-in{color:var(--green);font-weight:600}.tx-out{color:var(--red);font-weight:600}.tx-pending{color:var(--pending);font-weight:600}
+.more-btn,.theme-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-weight:700;cursor:pointer}
+body.dark .raw{background:#020B04;color:#A5D6A7}
 @media(max-width:700px){#q{width:150px}.detail .k{width:110px;min-width:110px}}
 </style>
 </head>
@@ -74,6 +82,7 @@ footer a{color:var(--accent-dark)}
     <a href="#/mempool" data-nav="mempool">Mempool</a>
   </nav>
   <div id="qwrap">
+    <button id="theme" class="theme-btn" type="button">Dark</button>
     <input id="q" type="text" placeholder="Search block height, hash, txid, or address" autocomplete="off">
   </div>
 </header>
@@ -84,6 +93,20 @@ footer a{color:var(--accent-dark)}
 "use strict";
 const API = new URLSearchParams(location.search).get("node") || "";
 const $ = s => document.querySelector(s);
+const savedTheme = localStorage.getItem("oriExplorerTheme") || "light";
+document.body.classList.toggle("dark", savedTheme === "dark");
+window.addEventListener("DOMContentLoaded", () => {
+  const btn = $("#theme");
+  if (btn) {
+    btn.textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
+    btn.onclick = () => {
+      const dark = !document.body.classList.contains("dark");
+      document.body.classList.toggle("dark", dark);
+      localStorage.setItem("oriExplorerTheme", dark ? "dark" : "light");
+      btn.textContent = dark ? "Light" : "Dark";
+    };
+  }
+});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const COIN = 100000000;
 const state = {tip:-1, reward:4628000000, halving:2102400, timer:null};
@@ -135,6 +158,11 @@ function scheduleAuto(fn, ms){
   if (state.timer) clearTimeout(state.timer);
   state.timer = setTimeout(() => { state.timer = null; fn(); }, ms);
 }
+function showAllInputs(){
+  document.querySelectorAll(".input-extra").forEach(x => x.style.display = "block");
+  const btn = document.querySelector("#showInputs");
+  if (btn) btn.style.display = "none";
+}
 
 /* ── Home ─────────────────────────────────────────────── */
 async function loadHome(){
@@ -142,11 +170,13 @@ async function loadHome(){
   state.tip = info.height;
   state.reward = info.block_reward_sats;
   state.halving = info.halving_interval;
-  const [supply, list] = await Promise.all([
+  const [supply, list, mp] = await Promise.all([
     api("/supply/"),
-    api("/blockchain/?start=" + Math.max(0, info.height - 9) + "&limit=10")
+    api("/blockchain/?start=" + Math.max(0, info.height - 9) + "&limit=10"),
+    api("/mempool/")
   ]);
   const rows = (list.chain || []).slice().sort((a,b) => b.height - a.height);
+  const latestTxs = (mp.txs || []).slice(0, 5);
   const supplyPct = Math.min(100, supply.circulating_sats / supply.max_supply_sats * 100);
   $("#sub").innerHTML = `
     <div class="cards">
@@ -163,7 +193,15 @@ async function loadHome(){
       <tr><th>Height</th><th>Age</th><th>Time</th><th class="right">Txs</th><th class="right">Size</th><th class="right">Difficulty</th><th class="right">Miner reward</th></tr>
       ${rows.map(b => `<tr><td><a href="#/block/${b.height}">${b.height}</a></td><td class="muted">${age(b.timestamp)}</td><td class="muted">${fmtTime(b.timestamp)}</td><td class="right">${b.tx_count}</td><td class="right muted">${b.size} B</td><td class="right">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</td><td class="right mono">${fmtOri(rewardAt(b.height))}</td></tr>`).join("")}
     </table>
-    <div class="pager"><span></span><button onclick="location.hash='#/blocks'">View all blocks &rarr;</button></div>`;
+    <div class="pager"><span></span><button onclick="location.hash='#/blocks'">View all blocks &rarr;</button></div>
+    <h2>Latest Transaction</h2>
+    ${latestTxs.length ? `<table>
+      <tr><th>Txid</th><th>Time</th><th class="right">Amount</th></tr>
+      ${latestTxs.map(t => {
+        const val = (t.outputs || []).reduce((a,o) => a + o.value, 0);
+        return `<tr><td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td><td class="muted">${t.timestamp ? fmtTime(t.timestamp) : "pending"}</td><td class="right mono tx-pending">${fmtOri(val)}</td></tr>`;
+      }).join("")}
+    </table>` : `<p class="muted">No pending transactions.</p>`}`;
   scheduleAuto(loadHome, 5000);
 }
 function fmtShortWork(w){
@@ -246,8 +284,9 @@ async function loadTx(txid){
       <div class="row"><div class="k">Fee</div><div class="v">${fee ? fmtOri(fee) : "&ndash;"}${d.fee_rate_sats ? ` <span class="muted">(${d.fee_rate_sats} sats/vB)</span>` : ""}</div></div>
       <div class="row"><div class="k">Version / Locktime</div><div class="v mono">${d.version} / ${d.locktime}</div></div>
       <div class="row"><div class="k">Inputs (${ins.length})</div><div class="v">
-        ${ins.length === 0 ? '<span class="muted">coinbase (new coins)</span>' : ins.map(i => `
-          <div style="padding:3px 0"><span class="mono">${i.coinbase ? "&#9671;" : ""}<a href="#/tx/${i.prev_txid}">${shortHash(i.prev_txid)}</a>:${i.prev_vout}</span> <span class="muted mono">${i.value != null ? "&middot; " + fmtOri(i.value) : ""}</span></div>`).join("")}
+        ${ins.length === 0 ? '<span class="muted">coinbase (new coins)</span>' : ins.map((i, idx) => `
+          <div class="${idx >= 5 ? "input-extra" : ""}" style="padding:3px 0;${idx >= 5 ? "display:none" : ""}"><span class="mono">${i.coinbase ? "&#9671;" : ""}<a href="#/tx/${i.prev_txid}">${shortHash(i.prev_txid)}</a>:${i.prev_vout}</span> <span class="muted mono">${i.value != null ? "&middot; " + fmtOri(i.value) : ""}</span></div>`).join("")}
+        ${ins.length > 5 ? `<button id="showInputs" class="more-btn" onclick="showAllInputs()">Show ${ins.length - 5} more inputs</button>` : ""}
       </div></div>
       <div class="row"><div class="k">Outputs (${outs.length})</div><div class="v">
         ${outs.map((o, i) => `<div style="padding:3px 0"><span class="mono">${o.address ? '<a href="#/address/' + o.address + '">' + esc(o.address) + '</a>' : esc(o.script_pubkey)}</span> <span class="right mono" style="float:right">${fmtOri(o.value)}</span></div>`).join("")}
@@ -265,20 +304,24 @@ async function loadAddress(addr){
   const immature = u.filter(x => !x.mature);
   const bal = mature.reduce((a,x) => a + x.value, 0);
   const imm = immature.reduce((a,x) => a + x.value, 0);
-  const txids = [...new Set(u.map(x => x.txid).filter(Boolean))];
+  const history = d.history || [];
+  const txids = [...new Set(history.map(x => x.txid).filter(Boolean))];
   $("#sub").innerHTML = `
     <h2>Address</h2>
     <div class="detail">
       <div class="row"><div class="k">Address</div><div class="v mono">${esc(addr)}</div></div>
-      <div class="row"><div class="k">Balance</div><div class="v mono"><b>${fmtOri(bal)}</b></div></div>
+      <div class="row"><div class="k">Balance</div><div class="v mono tx-in"><b>${fmtOri(bal)}</b></div></div>
+      <div class="row"><div class="k">Total received</div><div class="v mono tx-in">${fmtOri(d.total_received_sats || 0)}</div></div>
+      <div class="row"><div class="k">Total spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
+      <div class="row"><div class="k">Total volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
       <div class="row"><div class="k">Immature</div><div class="v mono">${fmtOri(imm)}</div></div>
-      <div class="row"><div class="k">UTXOs</div><div class="v">${u.length} (${immature.length} immature)</div></div>
-      <div class="row"><div class="k">Transactions</div><div class="v">${txids.length}</div></div>
+      <div class="row"><div class="k">UTXOs / Transactions</div><div class="v">${u.length} UTXOs (${immature.length} immature) / ${txids.length} transactions</div></div>
     </div>
+    <h2>Transactions</h2>
+    ${history.length ? `<table><tr><th>Txid</th><th>Time</th><th>Status</th><th class="right">Amount</th></tr>${history.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="muted">${x.timestamp ? fmtTime(x.timestamp) : "pending"}</td><td>${x.mempool ? '<span class="badge badge-pending">pending</span>' : x.net_sats >= 0 ? '<span class="badge badge-green">received</span>' : '<span class="badge badge-red">sent</span>'}</td><td class="right mono ${x.mempool ? "tx-pending" : x.net_sats >= 0 ? "tx-in" : "tx-out"}">${x.net_sats >= 0 ? "+" : ""}${fmtOri(x.net_sats)}</td></tr>`).join("")}</table>` : '<p class="muted">No transactions.</p>'}
     <h2>UTXOs</h2>
-    <table>
-      <tr><th>Txid</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
-      ${u.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="right mono">${x.vout}</td><td class="right mono">${fmtOri(x.value)}</td><td>${x.mature ? '<span class="badge badge-green">spendable</span>' : '<span class="badge badge-pending">immature</span>'}</td></tr>`).join("")}
+    <table><tr><th>Txid</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
+      ${u.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="right mono">${x.vout}</td><td class="right mono tx-in">${fmtOri(x.value)}</td><td>${x.mature ? '<span class="badge badge-green">spendable</span>' : '<span class="badge badge-pending">immature</span>'}</td></tr>`).join("")}
     </table>`;
 }
 

@@ -258,6 +258,10 @@ def create_app(node, lifespan=None):
             tx, entry = result
             position = entry.get("position")
             confirmations = node.storage.height() - entry["height"] + 1
+            ts = entry.get("timestamp")
+            if ts is None:
+                b_row = node.storage.block_by_height(entry["height"])
+                ts = b_row["timestamp"] if b_row else None
             return {
                 "txid": tx.txid().hex(),
                 "block_hash": entry["block_hash"],
@@ -265,7 +269,7 @@ def create_app(node, lifespan=None):
                 "confirmations": confirmations,
                 "mempool": False,
                 "deleted": False,
-                "timestamp": entry.get("timestamp"),
+                "timestamp": ts,
                 "block": {
                     "height": entry["height"],
                     "hash": entry["block_hash"],
@@ -304,12 +308,62 @@ def create_app(node, lifespan=None):
 
     @app.get("/address/{address}", summary="Address balance and UTXOs", tags=["Wallet"])
     def get_address(address: str):
+        utxos = node.chain.utxos_of(address)
+        history = []
+        total_received = 0
+        total_spent = 0
+        for row in node.storage.all_blocks():
+            block = node.chain._parse_row(row)
+            for tx in block.transactions:
+                txid = tx.txid().hex()
+                received = sum(o.value for o in tx.outputs if o.script_pubkey.decode(errors="replace") == address)
+                spent = 0
+                for txin in tx.inputs:
+                    if txin.prev_txid == NULL_HASH:
+                        continue
+                    prev = node.chain.get_tx(txin.prev_txid.hex())
+                    if not prev:
+                        continue
+                    prev_tx, _ = prev
+                    if txin.prev_vout < len(prev_tx.outputs):
+                        out = prev_tx.outputs[txin.prev_vout]
+                        if out.script_pubkey.decode(errors="replace") == address:
+                            spent += out.value
+                if received or spent:
+                    total_received += received
+                    total_spent += spent
+                    history.append({
+                        "txid": txid,
+                        "height": row["height"],
+                        "timestamp": row["timestamp"],
+                        "received_sats": received,
+                        "spent_sats": spent,
+                        "net_sats": received - spent,
+                        "mempool": False,
+                    })
+        for entry in node.mempool.to_json():
+            received = sum(o.get("value", 0) for o in entry.get("outputs", []) if o.get("script_pubkey") == address)
+            if received:
+                history.append({
+                    "txid": entry["txid"],
+                    "height": None,
+                    "timestamp": entry.get("timestamp"),
+                    "received_sats": received,
+                    "spent_sats": 0,
+                    "net_sats": received,
+                    "mempool": True,
+                })
+        history.sort(key=lambda x: (x.get("timestamp") or 0, x.get("txid") or ""), reverse=True)
         return {
             "address": address,
             "balance_sats": node.chain.balance(address),
             "immature_sats": node.chain.immature_balance(address),
             "coinbase_maturity": node.cfg.coinbase_maturity,
-            "utxos": node.chain.utxos_of(address),
+            "utxos": utxos,
+            "total_received_sats": total_received,
+            "total_spent_sats": total_spent,
+            "total_volume_sats": total_received + total_spent,
+            "history": history,
         }
 
     # ─────────────────────────────────────────────────────────────
