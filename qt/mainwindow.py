@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
-        self.setWindowTitle("ORI Core - Wallet")
+        self.setWindowTitle("Bitcoin Core - Wallet (ORI Compatible)")
         self.setWindowIcon(app_icon(32))
         self.resize(980, 620)
         self.setMinimumSize(760, 480)

@@ -145,10 +145,10 @@ def coinbase_tx(height: int, reward_sats: int, address: str, note: str = "") -> 
 
 def coinbase_height(tx: Transaction):
     script = tx.inputs[0].script_sig
-    if not script or script[0] > 75:
+    if not script or len(script) < 2:
         return None
     size = script[0]
-    if len(script) < 1 + size:
+    if size < 1 or size > 8 or len(script) < 1 + size:
         return None
     return int.from_bytes(script[1 : 1 + size], "little")
 
