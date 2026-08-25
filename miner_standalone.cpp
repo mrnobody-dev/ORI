@@ -379,6 +379,7 @@ int main(int argc, char* argv[]) {
     if (hw_cores < 1) hw_cores = 1;
     int threads = hw_cores; // will be clamped after arg parsing
     std::string token = "";
+    bool pool_mode = false;  // --pool: connect to PPLNS pool instead of node directly
 
     bool https = false;
     for (int i = 1; i < argc; ++i) {
@@ -407,34 +408,193 @@ int main(int argc, char* argv[]) {
         else if (arg == "--address" && i + 1 < argc) address = argv[++i];
         else if ((arg == "--threads" || arg == "--thread") && i + 1 < argc) {
             int t = std::stoi(argv[++i]);
-            // Clamp: at least 1, at most all physical cores.
             threads = std::max(1, std::min(t, hw_cores));
         }
         else if ((arg == "--token" || arg == "--api-token") && i + 1 < argc) token = argv[++i];
         else if (arg == "--https") https = true;
+        else if (arg == "--pool") pool_mode = true;
     }
 
     if (address.empty()) {
-        std::cout << "Usage: miner-ori --address <payout_address> [--host 127.0.0.1] [--port 8000] [--threads N] [--token API_TOKEN]" << std::endl;
+        std::cout << "Usage: miner-ori --address <payout_address> [options]" << std::endl;
+        std::cout << "  --host HOST      Pool/node host (default 127.0.0.1)" << std::endl;
+        std::cout << "  --port PORT      Pool/node port (default 8000)" << std::endl;
+        std::cout << "  --threads N      Number of CPU threads" << std::endl;
+        std::cout << "  --token TOKEN    API token" << std::endl;
+        std::cout << "  --pool           Pool mode: connect to PPLNS pool server" << std::endl;
+        std::cout << "  --https          Use HTTPS" << std::endl;
         return 1;
     }
 
-    std::cout << C_CYAN << " * ORI Native Miner " << C_RESET << "v1.0.0" << std::endl;
-    std::cout << C_DIM << " * protocol compatible with ORI Core mining/template" << C_RESET << std::endl;
-    std::cout << C_BLUE << " * node" << C_RESET << "    " << host << ":" << port << (https ? " tls" : "") << std::endl;
+    std::cout << C_CYAN << " * ORI Native Miner " << C_RESET << "v1.1.0" << std::endl;
+    std::cout << C_DIM  << " * " << (pool_mode ? "PPLNS pool mode" : "solo mining mode") << C_RESET << std::endl;
+    std::cout << C_BLUE << " * " << (pool_mode ? "pool" : "node") << C_RESET
+              << "    " << host << ":" << port << (https ? " tls" : "") << std::endl;
     std::cout << C_BLUE << " * payout" << C_RESET << "  " << address << std::endl;
-    std::cout << C_BLUE << " * cpu" << C_RESET << "     " << threads << " threads" << std::endl;
+    std::cout << C_BLUE << " * cpu   " << C_RESET << "  " << threads << " threads" << std::endl;
+    if (pool_mode)
+        std::cout << C_DIM << " * 1% pool fee, PPLNS payouts after 100-block maturity" << C_RESET << std::endl;
 
     CNGSHA256 hasher;
     uint64_t accepted_blocks = 0;
 
-    while (true) {
-        g_stop_mining.store(false); // global signal for Ctrl-C
+    // Per-round pool difficulty (updated after each accepted share via vardiff)
+    std::string pool_current_target_hex = "";
+    uint64_t    accepted_shares = 0;
 
+    while (true) {
+        g_stop_mining.store(false);
+
+        // ── POOL MODE ────────────────────────────────────────────────────────
+        if (pool_mode) {
+            std::string job_path = "/pool/job?worker=" + url_encode(address);
+            HTTPResult job_res = http_request(host, port, job_path, "GET", "", token, https);
+            if (job_res.status != 200) {
+                std::cout << "[ERROR] Cannot fetch pool job (HTTP " << job_res.status
+                          << "): " << job_res.body << ". Retrying in 3s..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                continue;
+            }
+
+            std::string json_job   = job_res.body;
+            std::string job_id     = json_extract_string(json_job, "job_id");
+            int64_t     height     = json_extract_int64(json_job, "height");
+            int64_t     reward     = json_extract_int64(json_job, "reward_sats");
+            uint32_t    bits       = (uint32_t)json_extract_int64(json_job, "bits");
+            uint32_t    timestamp  = (uint32_t)json_extract_int64(json_job, "timestamp");
+            std::string prev_hash_hex     = json_extract_string(json_job, "prev_hash");
+            std::string coinbase_address  = json_extract_string(json_job, "coinbase_address");
+            std::string pool_target_hex   = json_extract_string(json_job, "pool_target");
+            std::string node_target_hex   = json_extract_string(json_job, "node_target");
+
+            if (coinbase_address.empty() || pool_target_hex.empty()) {
+                std::cout << "[ERROR] Invalid pool job response. Retrying in 3s..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                continue;
+            }
+
+            // Normalize pool target
+            if (pool_target_hex.rfind("0x", 0) == 0) pool_target_hex = pool_target_hex.substr(2);
+            while (pool_target_hex.length() < 64) pool_target_hex = "0" + pool_target_hex;
+            std::vector<uint8_t> pool_target_bytes = hex_to_bytes(pool_target_hex);
+
+            // Build coinbase with POOL address (not worker address)
+            std::vector<uint8_t> coinbase_raw = build_coinbase(height, reward, coinbase_address);
+            std::vector<uint8_t> cb_txid(32);
+            hasher.sha256d(coinbase_raw.data(), coinbase_raw.size(), cb_txid.data());
+
+            std::vector<std::vector<uint8_t>> txids = { cb_txid };
+            std::vector<std::string> mempool_txs = json_extract_string_array(json_job, "txs");
+            for (const auto& tx_hex : mempool_txs) {
+                std::vector<uint8_t> tx_raw = hex_to_bytes(tx_hex);
+                std::vector<uint8_t> tid(32);
+                hasher.sha256d(tx_raw.data(), tx_raw.size(), tid.data());
+                txids.push_back(tid);
+            }
+
+            std::vector<uint8_t> merkle_root = compute_merkle_root(hasher, txids);
+            std::vector<uint8_t> prev_hash   = hex_to_bytes(prev_hash_hex);
+            if (prev_hash.size() != 32) {
+                std::cout << "[ERROR] Invalid prev_hash. Refreshing..." << std::endl;
+                continue;
+            }
+            std::reverse(prev_hash.begin(), prev_hash.end());
+
+            std::vector<uint8_t> static76;
+            int32_t version = 1;
+            static76.insert(static76.end(), (uint8_t*)&version, (uint8_t*)&version + 4);
+            static76.insert(static76.end(), prev_hash.begin(), prev_hash.end());
+            static76.insert(static76.end(), merkle_root.begin(), merkle_root.end());
+            static76.insert(static76.end(), (uint8_t*)&timestamp, (uint8_t*)&timestamp + 4);
+            static76.insert(static76.end(), (uint8_t*)&bits, (uint8_t*)&bits + 4);
+
+            double pool_diff = target_to_difficulty(pool_target_bytes);
+            std::cout << C_BLUE << "[pool]" << C_RESET
+                      << " job " << C_DIM << job_id << C_RESET
+                      << " height " << C_CYAN << height << C_RESET
+                      << " diff " << C_YELLOW << std::fixed << std::setprecision(4) << pool_diff << C_RESET
+                      << " coinbase→" << C_DIM << coinbase_address.substr(0, 12) << "..." << C_RESET
+                      << std::endl;
+
+            RoundState rs;
+            std::vector<std::thread> workers;
+            workers.reserve(threads);
+            auto t_start = std::chrono::high_resolution_clock::now();
+
+            for (int i = 0; i < threads; ++i)
+                workers.emplace_back(pow_worker, static76, pool_target_bytes,
+                                     (uint32_t)i, (uint32_t)threads, &rs);
+
+            for (int sec = 0; sec < 30; ++sec) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (rs.found.load(std::memory_order_acquire)) break;
+                if (g_stop_mining.load(std::memory_order_relaxed)) { rs.stop.store(true); break; }
+                auto   t_now = std::chrono::high_resolution_clock::now();
+                double elapsed = std::chrono::duration<double>(t_now - t_start).count();
+                double mh = (rs.total_hashes.load(std::memory_order_relaxed) / 1e6)
+                            / (elapsed > 0 ? elapsed : 1.0);
+                std::cout << "\r" << C_CYAN << "[cpu ]" << C_RESET
+                          << " threads " << threads
+                          << " | " << C_YELLOW << std::fixed << std::setprecision(2) << mh << " MH/s" << C_RESET
+                          << " | shares " << C_GREEN << accepted_shares << C_RESET
+                          << "    " << std::flush;
+            }
+
+            rs.stop.store(true, std::memory_order_relaxed);
+            for (auto& w : workers) if (w.joinable()) w.join();
+
+            if (!rs.found.load(std::memory_order_acquire)) continue;
+
+            uint32_t nonce = rs.winning_nonce.load(std::memory_order_relaxed);
+            std::vector<uint8_t> header80 = static76;
+            header80.insert(header80.end(), (uint8_t*)&nonce, (uint8_t*)&nonce + 4);
+            std::string header_hex = bytes_to_hex(header80.data(), 80);
+
+            // Display hash for logging
+            std::vector<uint8_t> hash_bin(32);
+            hasher.sha256d(header80.data(), 80, hash_bin.data());
+            std::vector<uint8_t> hash_disp = hash_bin;
+            std::reverse(hash_disp.begin(), hash_disp.end());
+            std::string hash_hex = bytes_to_hex(hash_disp.data(), 32);
+
+            double total_elapsed = std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - t_start).count();
+
+            std::cout << "\n" << C_GREEN << "[share]" << C_RESET
+                      << " nonce " << C_YELLOW << nonce << C_RESET
+                      << " hash 0x" << C_DIM << hash_hex.substr(0, 16) << "..." << C_RESET
+                      << " (" << std::fixed << std::setprecision(2) << total_elapsed << "s)"
+                      << std::endl;
+
+            // Submit share to pool
+            std::string submit_json = "{\"worker_addr\":\"" + address + "\","
+                                     "\"job_id\":\"" + job_id + "\","
+                                     "\"header_hex\":\"" + header_hex + "\"}";
+            HTTPResult sub = http_request(host, port, "/pool/submit", "POST",
+                                          submit_json, token, https);
+            if (sub.status == 200) {
+                accepted_shares++;
+                // Parse new pool_diff from response for vardiff
+                bool is_block = (sub.body.find("\"is_block\":true") != std::string::npos);
+                std::cout << C_GREEN << "[pool ]" << C_RESET
+                          << " " << C_GREEN << (is_block ? "BLOCK FOUND!" : "share accepted") << C_RESET
+                          << " (" << accepted_shares << " shares)"
+                          << std::endl;
+            } else {
+                std::cout << C_RED << "[pool ]" << C_RESET
+                          << " " << C_RED << "share rejected" << C_RESET
+                          << ": " << sub.body << std::endl;
+            }
+            continue;  // next round
+        }
+
+        // ── SOLO MODE (original code) ─────────────────────────────────────────
         std::string template_path = "/mining/template?address=" + url_encode(address);
         HTTPResult res = http_request(host, port, template_path, "GET", "", token, https);
         if (res.status != 200) {
-            std::cout << "[ERROR] Cannot fetch mining template (HTTP " << res.status << ", WinHTTP " << res.error << "): " << res.body << ". Retrying in 3s..." << std::endl;
+            std::cout << "[ERROR] Cannot fetch mining template (HTTP " << res.status
+                      << ", WinHTTP " << res.error << "): " << res.body
+                      << ". Retrying in 3s..." << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
