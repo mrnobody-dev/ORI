@@ -7,6 +7,10 @@ echo               ORI PPLNS POOL MINING
 echo =======================================================
 echo.
 echo Selamat datang di Pool Mining ORI!
+echo Pool Dashboard: https://ori-production-8364.up.railway.app/
+echo.
+echo Pastikan file miner-ori.exe ada di folder yang sama.
+echo Download dari: https://github.com/mrnobody-dev/ORI/releases
 echo.
 
 set /p WALLET="Masukkan Alamat Wallet ORI Anda (contoh: ori1q...): "
@@ -23,4 +27,7 @@ echo.
 
 miner-ori.exe --address %WALLET% --host ori-production-8364.up.railway.app --port 443 --https --pool --threads %THREADS%
 
+echo.
+echo Mining berhenti. Tekan tombol apa saja untuk keluar.
 pause
+

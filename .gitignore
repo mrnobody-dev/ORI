@@ -125,6 +125,8 @@ wallet-satoshi*.json
 test_logs/
 logs/
 *.exe
+*.zip
+dist-release/
 
 # local config / internal docs (not for public repo)
 config.json

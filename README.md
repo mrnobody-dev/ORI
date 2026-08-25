@@ -14,8 +14,8 @@ GUI wallet, REST API, solo **and pool** mining.
 :: solo mining (to your own address, needs your local ORICore running)
 miner-ori.exe --address ori1YOUR_ADDRESS --threads 8
 
-:: pool mining (PPLNS, connect to a pool server)
-miner-ori.exe --address ori1YOUR_ADDRESS --pool --host POOL_HOST --port POOL_PORT
+:: pool mining (PPLNS) — connect to the public ORI pool
+miner-ori.exe --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 2
 ```
 
 Your first address is shown on first launch of `ORICore.exe` (also under
