@@ -10,7 +10,7 @@ Whether you just want to run the wallet, start a node, or mine some ORI, this gu
 
 | File | Description |
 |------|-------------|
-| [**ORICore-v0.2.0-windows-x64.zip**](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.0/ORICore-v0.2.0-windows-x64.zip) | Full node + GUI wallet + miner (all-in-one) |
+| [**ORICore-v0.2.1-windows-x64.zip**](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.1/ORICore-v0.2.1-windows-x64.zip) | Full node + GUI wallet + miner (all-in-one) |
 
 **How to use:**
 1. Download and extract the ZIP
