@@ -96,6 +96,7 @@ class _Template:
         self.lock = threading.Lock()
         self.data: dict | None = None
         self.fetched_at = 0.0
+        self.last_error = ""
         self._stop = False
         self.thread = threading.Thread(target=self._loop, daemon=True)
 
@@ -114,8 +115,15 @@ class _Template:
                 ) else prev["job_seq"]
                 self.data = tpl
                 self.fetched_at = time.time()
+                self.last_error = ""
+            print(f"[pool] node template OK height={tpl['height']} "
+                  f"reward={tpl['reward_sats']}", flush=True)
             return True
-        except Exception:
+        except Exception as exc:
+            with self.lock:
+                self.last_error = f"{type(exc).__name__}: {exc}"
+            print(f"[pool] NODE UNREACHABLE ({POOL_NODE_URL}): {self.last_error}",
+                  flush=True)
             return False
 
     def _loop(self):
@@ -257,9 +265,15 @@ _submit_lock = threading.Lock()
 
 @app.get("/")
 def root():
+    with TPL.lock:
+        tpl_height = TPL.data["height"] if TPL.data else None
+        node_err = TPL.last_error
     return {
-        "name": "ORI PPLNS Pool",
+        "name": "ORI PPLNS Pool (pool_server.py)",
         "node": POOL_NODE_URL,
+        "node_reachable": node_err == "",
+        "node_last_error": node_err,
+        "node_tip_height": tpl_height,
         "pool_address": POOL_ADDRESS,
         "fee_pct": POOL_FEE_PCT,
         "pplns_points": PPLNS_POINTS,
@@ -275,7 +289,10 @@ def pool_job(worker: str = Query(...)):
         raise HTTPException(status_code=400, detail="invalid worker address")
     tpl = TPL.get()
     if tpl is None:
-        raise HTTPException(status_code=503, detail="node template unavailable")
+        with TPL.lock:
+            err = TPL.last_error
+        raise HTTPException(status_code=503,
+                            detail=f"node template unavailable ({POOL_NODE_URL}): {err}")
     w = LEDGER.workers.get(worker) or {}
     shift = int(w.get("shift", POOL_DIFF_SHIFT))
     node_target = target_from_bits(int(tpl["bits"]))
