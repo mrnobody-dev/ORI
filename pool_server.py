@@ -34,7 +34,6 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hashlib
@@ -233,10 +232,11 @@ def _parse_header(header_hex: str):
     return version, prev_hash, merkle, ts, bits, nonce
 
 
-def _expected_merkle(tpl: dict) -> bytes:
-    cb = coinbase_tx(int(tpl["height"]), int(tpl["reward_sats"]), POOL_ADDRESS)
+def _expected_merkle(job: dict) -> bytes:
+    """Recompute the merkle root a miner must produce for `job`."""
+    cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
     txids = [cb.txid()]
-    for hx in tpl.get("txs", []):
+    for hx in job.get("txs", []):
         from tx import Transaction
 
         txids.append(Transaction.from_hex(hx).txid())
@@ -262,6 +262,10 @@ class SubmitReq(BaseModel):
 
 
 _submit_lock = threading.Lock()
+_jobs_lock = threading.Lock()
+_recent_jobs: dict[str, dict] = {}             # job_id -> issued snapshot
+_seen_headers: deque = deque(maxlen=100_000)   # duplicate-share protection
+_JOB_SEQ_COUNTER = 0
 
 
 @app.get("/")
@@ -286,6 +290,7 @@ def root():
 
 @app.get("/pool/job")
 def pool_job(worker: str = Query(...)):
+    global _JOB_SEQ_COUNTER
     if not validate_address(worker):
         raise HTTPException(status_code=400, detail="invalid worker address")
     tpl = TPL.get()
@@ -299,19 +304,39 @@ def pool_job(worker: str = Query(...)):
     node_target = target_from_bits(int(tpl["bits"]))
     pool_target = min(node_target << shift, node_target) if shift == 0 else \
         node_target << shift
-    job_id = f'{tpl["height"]}-{tpl["job_seq"]}'
+
+    # Unique job per request. The reference miner rebuilds its candidate
+    # deterministically from (height, reward, coinbase, txs, timestamp), so a
+    # repeated job_id made it rediscover the SAME nonce and resubmit a
+    # duplicate share. Issuing fresh seq+timestamp breaks that loop.
+    with _jobs_lock:
+        _JOB_SEQ_COUNTER += 1
+        seq = _JOB_SEQ_COUNTER
+        job_id = f'{tpl["height"]}-{seq}'
+        ts = max(int(time.time()), int(tpl["timestamp"]))
+        _recent_jobs[job_id] = {
+            "height": int(tpl["height"]),
+            "reward_sats": int(tpl["reward_sats"]),
+            "bits": int(tpl["bits"]),
+            "timestamp": ts,
+            "prev_hash": tpl["prev_hash"],
+            "txs": list(tpl.get("txs", [])),
+        }
+        while len(_recent_jobs) > 240:
+            _recent_jobs.pop(next(iter(_recent_jobs)))
+
     return {
         "job_id": job_id,
         "height": int(tpl["height"]),
         "reward_sats": int(tpl["reward_sats"]),
         "bits": int(tpl["bits"]),
-        "timestamp": int(tpl["timestamp"]),
+        "timestamp": ts,
         "prev_hash": tpl["prev_hash"],
         "coinbase_address": POOL_ADDRESS,
         "pool_target": _target_hex(pool_target),
         "node_target": _target_hex(node_target),
         "pplns_points": PPLNS_POINTS,
-        "txs": tpl.get("txs", []),
+        "txs": list(tpl.get("txs", [])),
     }
 
 
@@ -319,30 +344,39 @@ def pool_job(worker: str = Query(...)):
 def pool_submit(body: SubmitReq):
     if not validate_address(body.worker_addr):
         raise HTTPException(status_code=400, detail="invalid worker address")
-    tpl = TPL.get()
-    if tpl is None:
-        raise HTTPException(status_code=503, detail="node template unavailable")
+
+    with _jobs_lock:
+        job = _recent_jobs.get(body.job_id)
+    if job is None:
+        raise HTTPException(status_code=400, detail="stale job — request a new one")
 
     try:
         version, prev_hash, merkle, ts, bits, nonce = _parse_header(body.header_hex)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"bad header: {exc}")
 
-    job_height, job_seq = body.job_id.split("-")
-    if int(job_height) != int(tpl["height"]) or int(job_seq) != int(tpl["job_seq"]):
-        raise HTTPException(status_code=400, detail="stale job — request a new one")
-    if hexstr_bytes(prev_hash) != tpl["prev_hash"]:
+    if hexstr_bytes(prev_hash) != job["prev_hash"]:
         raise HTTPException(status_code=400, detail="prev_hash mismatch")
-    if bits != int(tpl["bits"]):
+    if bits != int(job["bits"]):
         raise HTTPException(status_code=400, detail="bits mismatch")
-    if abs(ts - time.time()) > 90:
+    if abs(ts - time.time()) > 120 or ts < int(job["timestamp"]) - 5:
         raise HTTPException(status_code=400, detail="timestamp out of range")
-    if merkle != _expected_merkle(tpl):
+    if merkle != _expected_merkle(job):
         raise HTTPException(status_code=400, detail="merkle root mismatch")
 
     header80 = bytes.fromhex(body.header_hex)
     h = _sha256d(header80)
-    node_target = target_from_bits(int(tpl["bits"]))
+
+    # duplicate protection: identical header (same PoW solution) must never
+    # be credited twice — deterministic miners resubmitting the same nonce
+    with _jobs_lock:
+        dup = h.hex() in _seen_headers
+        if not dup:
+            _seen_headers.append(h.hex())
+    if dup:
+        raise HTTPException(status_code=400, detail="duplicate share")
+
+    node_target = target_from_bits(int(job["bits"]))
     w = LEDGER.workers.get(body.worker_addr) or {}
     shift = int(w.get("shift", POOL_DIFF_SHIFT))
     pool_target = node_target << shift
@@ -356,7 +390,7 @@ def pool_submit(body: SubmitReq):
         if int.from_bytes(h, "big") > pool_target:
             raise HTTPException(status_code=400, detail="above pool target (low difficulty share)")
         new_shift = LEDGER.add_share(body.worker_addr)
-        wt = target_from_bits(int(tpl["bits"])) << new_shift
+        wt = target_from_bits(int(job["bits"])) << new_shift
         with LEDGER.lock:
             balance = LEDGER.balances.get(body.worker_addr, 0)
         return {
@@ -371,15 +405,14 @@ def pool_submit(body: SubmitReq):
 
     # ── REAL BLOCK ── assemble & relay to the node ──
     with _submit_lock:
-        # re-validate against fresh tip to avoid duplicate submissions
-        cur_tpl = TPL.get(max_age=3600) or tpl
-        if cur_tpl["height"] != tpl["height"]:
+        cur_tpl = TPL.get(max_age=3600)
+        if cur_tpl is None or int(cur_tpl["height"]) != int(job["height"]):
             raise HTTPException(status_code=400, detail="chain moved on — stale block")
         from block import Block, BlockHeader
         from tx import Transaction
 
-        cb = coinbase_tx(int(tpl["height"]), int(tpl["reward_sats"]), POOL_ADDRESS)
-        txs = [cb] + [Transaction.from_hex(hx) for hx in tpl.get("txs", [])]
+        cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
+        txs = [cb] + [Transaction.from_hex(hx) for hx in job.get("txs", [])]
         hdr = BlockHeader(version=version, prev_hash=prev_hash, merkle_root=merkle,
                           timestamp=ts, bits=bits, nonce=nonce)
         blk = Block(hdr, txs)
@@ -388,13 +421,13 @@ def pool_submit(body: SubmitReq):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:200]
             raise HTTPException(status_code=502, detail=f"node rejected block: {detail}")
-        payout = LEDGER.credit_block(int(tpl["reward_sats"]))
+        payout = LEDGER.credit_block(int(job["reward_sats"]))
         TPL.refresh()
         return {
             "accepted": True,
             "is_block": True,
-            "height": int(tpl["height"]),
-            "reward_sats": int(tpl["reward_sats"]),
+            "height": int(job["height"]),
+            "reward_sats": int(job["reward_sats"]),
             "payout": payout,
             "window_points": len(LEDGER.window),
             "balance_sats": LEDGER.balances.get(body.worker_addr, 0),

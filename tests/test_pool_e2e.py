@@ -124,10 +124,33 @@ def main():
         "worker_addr": worker, "job_id": job_id, "header_hex": bytes(bad).hex()})
     assert r.status_code == 400 and "merkle" in r.json()["detail"]
 
-    # 3) stale job rejected
+    # 3) stale/unknown job rejected
     r = client.post("/pool/submit", json={
         "worker_addr": worker, "job_id": "1-99", "header_hex": share_hdr})
     assert r.status_code == 400 and "stale" in r.json()["detail"]
+
+    # 3b) jobs are unique per request (anti duplicate-nonce loop)
+    j1 = client.get("/pool/job", params={"worker": worker}).json()
+    j2 = client.get("/pool/job", params={"worker": worker}).json()
+    assert j1["job_id"] != j2["job_id"], "job ids must be unique per request"
+
+    # 3c) duplicate header rejected even under a fresh valid job
+    j3 = client.get("/pool/job", params={"worker": worker}).json()
+    tgt3 = int(j3["pool_target"], 16)
+    hdr_dup = bytearray(bytes.fromhex(share_hdr))
+    hdr_dup[68:72] = struct.pack("<I", j3["timestamp"] + 5)  # distinct ts
+    while True:
+        h = hashlib.sha256(hashlib.sha256(bytes(hdr_dup)).digest()).digest()
+        if int.from_bytes(h, "big") <= tgt3:
+            break
+        nonce = struct.unpack_from("<I", hdr_dup, 76)[0] + 1
+        struct.pack_into("<I", hdr_dup, 76, nonce)
+    r = client.post("/pool/submit", json={
+        "worker_addr": worker, "job_id": j3["job_id"], "header_hex": hdr_dup.hex()})
+    assert r.status_code == 200, r.text          # first time accepted
+    r = client.post("/pool/submit", json={
+        "worker_addr": worker, "job_id": j3["job_id"], "header_hex": hdr_dup.hex()})
+    assert r.status_code == 400 and "duplicate" in r.json()["detail"]
 
     # 4) REAL BLOCK path (mine at full network difficulty)
     block_hdr = mine_header(node_target).hex()
