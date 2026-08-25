@@ -120,6 +120,11 @@ wallet.json.bak
 wallet.dat
 wallet.dat.tmp
 *.qt.json
+wallet-backup*.json
+wallet-satoshi*.json
+test_logs/
+logs/
+*.exe
 
 # local config / internal docs (not for public repo)
 config.json

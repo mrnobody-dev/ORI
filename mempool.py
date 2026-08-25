@@ -1,4 +1,5 @@
 import threading
+import heapq
 import math
 import time
 from collections import defaultdict, deque
@@ -10,6 +11,7 @@ MAX_DESCENDANTS = 25
 MAX_ANCESTOR_SIZE = 101 * 1000  # 101 kVBytes
 MAX_DESCENDANT_SIZE = 101 * 1000  # 101 kVBytes
 JUMBO_TX_THRESHOLD = 101 * 1000  # txs above this pay premium relay fee
+RBF_INCREMENTAL_RATE = 0.05  # sat/vB anti-thrash increment for RBF replacement
 
 
 class Mempool:
@@ -79,10 +81,15 @@ class Mempool:
     # ── write operations ──────────────────────────────────────────────────
 
     def add(self, tx: object, fee: int) -> tuple[bool, str]:
-        """Add tx to mempool. Returns (True, "ok") or (False, reason)."""
+        """Add tx to mempool. Returns (True, "ok") or (False, reason).
+
+        When the pool is full the lowest-fee-rate tx is evicted (Bitcoin Core
+        policy) provided the newcomer pays a higher rate."""
         with self._lock:
             if len(self._txs) >= self.max_txs:
-                return False, "mempool capacity reached"
+                evicted = self._evict_one_locked(tx, fee)
+                if not evicted:
+                    return False, "mempool capacity reached"
             txid = tx.txid()
             if txid in self._txs:
                 return False, "tx already in mempool"
@@ -147,6 +154,21 @@ class Mempool:
     def _tx_vsize(self, tx) -> int:
         """Virtual size of transaction."""
         return len(tx.serialize())
+
+    def _evict_one_locked(self, incoming_tx, incoming_fee: int) -> bool:
+        """Evict the lowest-fee-rate tx to make room for a higher-rate one."""
+        if not self._txs:
+            return False
+        inc_rate = incoming_fee / max(len(incoming_tx.serialize()), 1)
+        victim = min(self._txs, key=lambda t: self._rate(t))
+        if self._rate(victim) >= inc_rate:
+            return False
+        # Evict victim AND its orphaned descendants (they die with it).
+        doomed = {victim} | (self._descendants.get(victim, set()) & set(self._txs))
+        for d in list(doomed):
+            if d in self._txs:
+                self._remove_txid_locked(d)
+        return True
 
     def _get_ancestors_for_tx_locked(self, tx) -> set:
         """Get all mempool ancestors of a candidate tx before insertion."""
@@ -301,10 +323,11 @@ class Mempool:
 
     def replace(self, old_txid: bytes, new_tx, new_fee: int, min_relay_fee_per_vb: float = 0.28) -> bool:
         """RBF: replace old_txid with new_tx if new_fee is sufficiently higher.
-        
+
         Rules (BIP-125 inspired):
         1. new_tx must spend at least one input that old_tx spent.
-        2. new_fee must be > old_fee + ceil(new_size * min_relay_fee_per_vb).
+        2. new_fee must exceed old_fee by a small anti-thrash increment
+           (RBF_INCREMENTAL_RATE sat/vB) so any higher fee tier passes.
         3. new_tx must not introduce new unconfirmed parents.
         """
         import math
@@ -324,9 +347,9 @@ class Mempool:
             if not old_inputs & new_inputs:
                 return False
 
-            # Rule 2: new fee must be sufficiently higher
+            # Rule 2: new fee must be strictly higher (small anti-thrash increment)
             new_size = len(new_tx.serialize())
-            min_bump = math.ceil(new_size * min_relay_fee_per_vb)
+            min_bump = math.ceil(new_size * RBF_INCREMENTAL_RATE)
             if new_fee <= old_fee + min_bump:
                 return False
 
@@ -342,7 +365,8 @@ class Mempool:
 
             # Atomically remove old, add new
             self._remove_txid_locked(old_txid)
-            if self.add(new_tx, new_fee):
+            added, _ = self.add(new_tx, new_fee)
+            if added:
                 return True
             self.add(old_tx, old_fee)
             return False
@@ -378,7 +402,17 @@ class Mempool:
         self._ancestors.pop(txid, None)
         self._descendants.pop(txid, None)
 
-    def remove_spent(self, block_txs: list):
+    def remove_spent(self, block_txs: list, chain_has_output=None):
+        """Drop mempool txs mined/conflicted by a block, plus every descendant
+        whose parent outputs no longer resolve.
+
+        Critical invariant: a tx whose parent output exists neither in the
+        pool nor on-chain must NEVER stay — otherwise templates include it
+        and miners build invalid blocks.
+
+        `chain_has_output(txid_bytes, vout) -> bool` lets the orphan sweep
+        verify against confirmed UTXOs; without it only pool-internal links
+        are checked."""
         with self._lock:
             for tx in block_txs:
                 self._remove_txid_locked(tx.txid())
@@ -387,6 +421,37 @@ class Mempool:
                         key = (txin.prev_txid, txin.prev_vout)
                         if key in self._inputs:
                             self._remove_txid_locked(self._inputs[key])
+            self._evict_orphans_locked(chain_has_output)
+
+    def _evict_orphans_locked(self, chain_has_output=None):
+        """Recursively remove txs whose parent outputs no longer resolve."""
+        changed = True
+        while changed:
+            changed = False
+            # Rebuild the live-output view each round: removing a dangling
+            # parent invalidates its children's inputs too.
+            live_prev = set()
+            for t in self._txs.values():
+                tid = t.txid()
+                for o in range(len(t.outputs)):
+                    live_prev.add((tid, o))
+            for txid in list(self._txs.keys()):
+                tx = self._txs[txid]
+                dangling = False
+                for txin in tx.inputs:
+                    if txin.prev_txid == b"\x00" * 32:
+                        continue
+                    key = (txin.prev_txid, txin.prev_vout)
+                    if key in live_prev:
+                        continue
+                    if chain_has_output is not None and txin.prev_txid != b"\x00" * 32 \
+                            and chain_has_output(txin.prev_txid, txin.prev_vout):
+                        continue
+                    dangling = True
+                    break
+                if dangling:
+                    self._remove_txid_locked(txid)
+                    changed = True
 
     # ── ordering / selection ──────────────────────────────────────────────
 
@@ -398,57 +463,91 @@ class Mempool:
         return self._fees[txid] / max(len(tx.serialize()), 1)
 
     def ordered_with_fees(self, max_bytes: int = None):
-        """Topological sort by fee rate. Children of skipped parents are also
-        skipped (they depend on a UTXO that won't be in the block)."""
+        """Topological order by fee rate using a max-heap — O(N log N).
+
+        Children of skipped parents are also skipped (they depend on a UTXO
+        that won't be in the block)."""
         with self._lock:
-            # Build dependency graph
-            in_degree = {txid: 0 for txid in self._txs}
-            children = {txid: [] for txid in self._txs}
+            # Build dependency graph (children keyed by parent txid).
+            children = defaultdict(list)
+            in_degree = {}
             for txid, tx in self._txs.items():
+                deg = 0
                 for txin in tx.inputs:
                     if txin.prev_txid in self._txs:
-                        in_degree[txid] += 1
+                        deg += 1
                         children[txin.prev_txid].append(txid)
+                in_degree[txid] = deg
 
-            available = [txid for txid, deg in in_degree.items() if deg == 0]
+            # Heap of (-rate, seq, txid); seq breaks ties deterministically.
+            counter = 0
+            heap = []
+            for txid, deg in in_degree.items():
+                if deg == 0:
+                    heapq.heappush(heap, (-self._rate(txid), counter, txid))
+                    counter += 1
+
             selected = []
             total = 0
-            skipped = set()  # txids whose parents were skipped
-
-            while available:
-                best_txid = max(
-                    (t for t in available if t not in skipped),
-                    key=lambda t: self._rate(t),
-                    default=None,
-                )
-                if best_txid is None:
-                    break
-                available.remove(best_txid)
-
-                tx = self._txs[best_txid]
-                size = len(tx.serialize())
-
-                if best_txid in skipped or (max_bytes is not None and total + size > max_bytes):
-                    # Skip this tx AND cascade-skip all children
-                    skipped.add(best_txid)
-                    for child in children[best_txid]:
-                        in_degree[child] -= 1
-                        skipped.add(child)
-                        if in_degree[child] == 0:
-                            available.append(child)
+            while heap and (max_bytes is None or total < max_bytes):
+                _neg_rate, _seq, best = heapq.heappop(heap)
+                if best not in self._txs:
                     continue
-
-                selected.append((tx, self._fees[best_txid]))
+                size = self._tx_sizes.get(best) or len(self._txs[best].serialize())
+                if max_bytes is not None and total + size > max_bytes:
+                    continue  # too big; keep pulling cheaper ones
+                selected.append((self._txs[best], self._fees[best]))
                 total += size
-
-                for child in children[best_txid]:
+                for child in children.get(best, ()):
                     in_degree[child] -= 1
                     if in_degree[child] == 0:
-                        available.append(child)
+                        heapq.heappush(heap, (-self._rate(child), counter, child))
+                        counter += 1
 
             return selected
 
     # ── serialisation ─────────────────────────────────────────────────────
+
+    def summary(self) -> list:
+        """Lightweight per-tx metadata for UI polling — no hex serialization.
+
+        Returns [{txid, timestamp, fee, size, fee_rate, rbf, inputs, outputs}]
+        where inputs/outputs carry only what wallet views need."""
+        with self._lock:
+            out = []
+            for txid, tx in self._txs.items():
+                out.append(
+                    {
+                        "txid": txid.hex(),
+                        "timestamp": self._times.get(txid),
+                        "fee": self._fees.get(txid, 0),
+                        "size": self._tx_sizes.get(txid) or len(tx.serialize()),
+                        "fee_rate": round(self._rate(txid), 2),
+                        "rbf": any(
+                            txin.sequence < 0xFFFFFFFE
+                            for txin in tx.inputs
+                            if txin.prev_txid != b"\x00" * 32
+                        ),
+                        "inputs": [
+                            {
+                                "prev_txid": txin.prev_txid.hex(),
+                                "prev_vout": txin.prev_vout,
+                            }
+                            for txin in tx.inputs
+                            if txin.prev_txid != b"\x00" * 32
+                        ],
+                        "outputs": [
+                            {
+                                "value": txout.value,
+                                "script_pubkey": txout.script_pubkey.decode(
+                                    errors="replace"
+                                ),
+                            }
+                            for txout in tx.outputs
+                        ],
+                    }
+                )
+            return out
 
     def to_json(self) -> list:
         with self._lock:

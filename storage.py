@@ -128,6 +128,62 @@ class Storage:
             ).fetchone()
             return row is not None
 
+    def side_count(self) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM blocks WHERE main = 0"
+            ).fetchone()
+            return row[0] if row else 0
+
+    def oldest_side_hashes(self, limit: int):
+        """Oldest-stored non-main block hashes (FIFO eviction candidates)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT hash FROM blocks WHERE main = 0 ORDER BY id LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def delete_by_hashes(self, hashes: list):
+        if not hashes:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "DELETE FROM blocks WHERE hash = ?", [(h,) for h in hashes]
+            )
+            self._conn.commit()
+
+    def reorg_apply(self, delete_height_from: int, rows: list):
+        """Atomically: delete main-chain rows at height >= delete_height_from,
+        then insert `rows` (full block-row dicts, `main` key honored).
+
+        A crash mid-reorg can never leave the chain half-swapped."""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "DELETE FROM blocks WHERE height >= ? AND main = 1",
+                    (delete_height_from,),
+                )
+                for r in rows:
+                    self._conn.execute(
+                        """INSERT OR REPLACE INTO blocks
+                           (height, hash, prev_hash, merkle_root, timestamp,
+                            bits, nonce, version, work, main, raw)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            r["height"], r["hash"], r["prev_hash"],
+                            r["merkle_root"], r["timestamp"], r["bits"],
+                            r["nonce"], r["version"], r["work"],
+                            1 if r.get("main", True) else 0,
+                            sqlite3.Binary(r["raw"]),
+                        ),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def iterate_from(self, start_height: int, limit: int = 500, main_only: bool = True):
         where = "AND main = 1" if main_only else ""
         with self._lock:

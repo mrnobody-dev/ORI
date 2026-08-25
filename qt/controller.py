@@ -33,6 +33,8 @@ from wallet import (
     sign_planned_wallet,
     wallet_is_encrypted,
 )
+from ecdsa import SECP256k1
+from utils import sha256d
 
 COIN = 100_000_000
 
@@ -58,6 +60,85 @@ class NodeController(QObject):
     started = Signal(bool)  # bool = first_run
     error = Signal(str)
 
+    # Shared signed-message prefix (also used by the standalone verifier).
+    _MSG_PREFIX = b"ORI Signed Message:\n"
+
+    @staticmethod
+    def verify_message_static(address: str, message: str, sig_hex: str) -> bool:
+        """Verify a message signature against any bech32 address.
+
+        Implements ECDSA public-key recovery directly on secp256k1 (the
+        python-ecdsa recovery API proved unreliable for normalized low-S
+        signatures): try both R parities / overflow cases, derive the signer
+        pubkey, compress it and compare hash160 against the address program.
+        """
+        from bech32 import address_to_program
+        from utils import hash160 as _h160
+
+        curve_p = SECP256k1.curve.p()
+        n = SECP256k1.order
+        gx, gy = SECP256k1.generator.x(), SECP256k1.generator.y()
+        G = (gx, gy)
+
+        def _add(P, Q):
+            if P is None:
+                return Q
+            if Q is None:
+                return P
+            if P[0] == Q[0] and (P[1] + Q[1]) % curve_p == 0:
+                return None
+            if P == Q:
+                lam = (3 * P[0] * P[0]) % curve_p * pow(2 * P[1] % curve_p,
+                                                        curve_p - 2, curve_p) % curve_p
+            else:
+                lam = (Q[1] - P[1]) % curve_p * pow((Q[0] - P[0]) % curve_p,
+                                                    curve_p - 2, curve_p) % curve_p
+            x3 = (lam * lam - P[0] - Q[0]) % curve_p
+            y3 = (lam * (P[0] - x3) - P[1]) % curve_p
+            return x3, y3
+
+        def _mul(k, P):
+            R = None
+            A = P
+            while k:
+                if k & 1:
+                    R = _add(R, A)
+                A = _add(A, A)
+                k >>= 1
+            return R
+
+        try:
+            sig = bytes.fromhex(sig_hex)
+            if len(sig) != 64:
+                return False
+            r = int.from_bytes(sig[:32], "big")
+            s = int.from_bytes(sig[32:], "big")
+            if not (0 < r < n and 0 < s < n):
+                return False
+            program = address_to_program(address)
+            digest = sha256d(NodeController._MSG_PREFIX + message.encode("utf-8"))
+            e = int.from_bytes(digest, "big")
+
+            alpha = (pow(r, 3, curve_p) + 7) % curve_p
+            beta = pow(alpha, (curve_p + 1) // 4, curve_p)
+            for par in (0, 1):
+                y = beta if beta % 2 == par else (curve_p - beta)
+                R = (r, y)
+                # skip if R not on curve (x >= n case ignored: r < n << p)
+                rinv = pow(r, n - 2, n)
+                eG = _mul(e % n, G)
+                neg_eG = (eG[0], (-eG[1]) % curve_p)
+                Q = _mul(rinv, _add(_mul(s, R), neg_eG))
+                if Q is None:
+                    continue
+                comp = (b"\x02" if Q[1] % 2 == 0 else b"\x03") + \
+                    int(Q[0]).to_bytes(32, "big")
+                if _h160(comp) == program:
+                    return True
+            return False
+        except Exception:
+            return False
+
     def __init__(self, cfg: Config, wallet_path: str = DEFAULT_WALLET):
         super().__init__()
         self.cfg = cfg
@@ -72,6 +153,7 @@ class NodeController(QObject):
             "labels": {},
             "history": [],
             "receive_requests": [],
+            "address_book": [],
             "default_account": "",
             "fee_tier": 3,
         }
@@ -82,13 +164,28 @@ class NodeController(QObject):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.refresh)
         self._scan_budget = 500
+        # Adaptive polling: fast while catching up / active, relaxed when idle.
+        self._interval_active_ms = 1000
+        self._interval_idle_ms = 3000
+        self._last_snapshot_key = None
+        self._meta_dirty = False
+        self._meta_last_save = 0.0
+        # Wallet auto-lock (minutes; 0 = disabled).
+        self.autolock_minutes = int(self.meta.get("autolock_minutes", 0) or 0)
+        self._autolock_timer = QTimer(self)
+        self._autolock_timer.setSingleShot(True)
+        self._autolock_timer.timeout.connect(self._on_autolock)
+        self._history_cap = 5000
+        self._requests_cap = 500
 
         self._log_bridge = LogBridge()
         self._log_bridge.setFormatter(
             logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%dT%H:%M:%SZ")
         )
         self._log_bridge.message.connect(self.log_line.emit)
-        logging.getLogger("ori").addHandler(self._log_bridge)
+        _ori_logger = logging.getLogger("ori")
+        if self._log_bridge not in _ori_logger.handlers:
+            _ori_logger.addHandler(self._log_bridge)
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -132,12 +229,23 @@ class NodeController(QObject):
     def _start_api(self):
         """Start the in-process FastAPI/REST API on cfg.api_port.
 
+        Security default: bind to 127.0.0.1 unless the user explicitly
+        configured a public host via env/config. A public bind without an
+        API token makes protected endpoints (send tx, mining, addpeer) return
+        403 even for local CLI tools — binding loopback keeps every local
+        feature working while staying unreachable from the network.
+
         If the port is already taken (e.g. an old node still running), try
         the next free port instead of silently failing. Exposes
         `cfg.api_port` and `api_url` so the UI can show the real endpoint.
         """
         import socket
         import uvicorn
+
+        # Loopback-by-default for the desktop wallet's embedded API.
+        if os.environ.get("BTPY_API_HOST") is None and \
+                not getattr(self.cfg, "_api_host_explicit", False):
+            self.cfg.api_host = "127.0.0.1"
 
         port = self.cfg.api_port
         free_port = None
@@ -168,13 +276,24 @@ class NodeController(QObject):
                 access_log=False,
             )
             self._api_server = uvicorn.Server(config)
-            threading.Thread(target=self._api_server.run, daemon=True).start()
-        except Exception:
+            self._api_thread = threading.Thread(target=self._api_server.run, daemon=True)
+            self._api_thread.start()
+        except Exception as exc:
+            from utils import logger, LogCategory
+
+            logger.warn(LogCategory.API, "Embedded API failed to start", error=str(exc))
             self._api_server = None
 
     def shutdown(self):
         self._timer.stop()
-        self._save_meta()
+        self._save_meta(force=True)
+        # Cleanly stop the embedded API server (release the port).
+        if self._api_server is not None:
+            try:
+                self._api_server.should_exit = True
+            except Exception:
+                pass
+            self._api_server = None
         if self.node:
             try:
                 self.node.stop()
@@ -193,8 +312,25 @@ class NodeController(QObject):
         except (OSError, json.JSONDecodeError):
             pass
 
-    def _save_meta(self):
+    def _save_meta(self, force: bool = False):
+        """Debounced meta persistence — at most once per 30s unless forced.
+
+        History is pruned to `_history_cap` records so the meta file stays
+        small (it previously grew unbounded and reached multi-MB sizes)."""
+        self._meta_dirty = True
+        now_ts = time.time()
+        if not force and now_ts - self._meta_last_save < 30:
+            return
+        self._meta_last_save = now_ts
+        self._meta_dirty = False
         try:
+            hist = self.meta.get("history") or []
+            if len(hist) > self._history_cap:
+                hist.sort(key=lambda r: (r.get("timestamp", 0), r.get("txid", "")), reverse=True)
+                self.meta["history"] = hist[: self._history_cap]
+            reqs = self.meta.get("receive_requests") or []
+            if len(reqs) > self._requests_cap:
+                self.meta["receive_requests"] = reqs[-self._requests_cap:]
             with open(self.meta_path, "w", encoding="utf-8") as f:
                 json.dump(self.meta, f, indent=2)
         except OSError:
@@ -233,6 +369,38 @@ class NodeController(QObject):
 
     def add_receive_request(self, entry: dict):
         self.meta.setdefault("receive_requests", []).insert(0, entry)
+        self._save_meta()
+
+    # --- address book ------------------------------------------------------
+
+    def book_list(self) -> list:
+        return list(self.meta.get("address_book", []))
+
+    def book_add(self, label: str, address: str) -> bool:
+        from bech32 import validate_address
+        if not validate_address(address, self.cfg.network_hrp):
+            raise WalletError("invalid ORI address")
+        book = self.meta.setdefault("address_book", [])
+        for entry in book:
+            if entry.get("address") == address:
+                if label:
+                    entry["label"] = label
+                    self._save_meta()
+                return False
+        book.append({"label": label, "address": address})
+        self._save_meta()
+        return True
+
+    def book_remove(self, address: str):
+        book = self.meta.setdefault("address_book", [])
+        self.meta["address_book"] = [e for e in book if e.get("address") != address]
+        self._save_meta()
+
+    def book_set_label(self, address: str, label: str):
+        for entry in self.meta.setdefault("address_book", []):
+            if entry.get("address") == address:
+                entry["label"] = label
+                break
         self._save_meta()
 
     # --- node snapshot -----------------------------------------------------
@@ -294,7 +462,7 @@ class NodeController(QObject):
 
         pending_in = 0
         pending_out = 0
-        mempool = node.mempool.to_json()
+        mempool = node.mempool.summary()
         for entry in mempool:
             for out in entry.get("outputs", []):
                 if out.get("script_pubkey") in addrs:
@@ -325,10 +493,39 @@ class NodeController(QObject):
         try:
             self._scan_history_step()
             snap = self._build_snapshot()
+            # UI dirty-check: skip widget rebuilds when nothing changed.
+            key = (
+                snap.get("height"), snap.get("best_hash"), snap.get("peers"),
+                snap.get("mempool"), snap.get("balances", {}).get("available"),
+                snap.get("balances", {}).get("pending"), snap.get("synced"),
+                snap.get("behind"), len(snap.get("history_count", ()) or ()),
+                self.meta.get("history") and self.meta["history"][0].get("txid", "")
+                if self.meta.get("history") else "",
+                self.is_locked(),
+            )
+            changed = key != self._last_snapshot_key
+            # Adaptive cadence: relax to idle interval when nothing happens
+            # and we're in sync; tighten while catching up or busy.
+            interval = (self._interval_active_ms
+                        if (not snap.get("synced", True) or snap.get("mempool", 0)
+                           or self._meta_dirty or snap.get("height") != getattr(self, "_last_height_seen", -1))
+                        else self._interval_idle_ms)
+            self._last_height_seen = snap.get("height")
+            if self._timer.interval() != interval:
+                self._timer.setInterval(interval)
+            if not changed:
+                self._maybe_flush_meta()
+                return
+            self._last_snapshot_key = key
             self.snapshot_ready.emit(snap)
             self.history_ready.emit(list(self.meta.get("history", [])))
+            self._maybe_flush_meta()
         except Exception as exc:
             self.error.emit(str(exc))
+
+    def _maybe_flush_meta(self):
+        if self._meta_dirty and time.time() - self._meta_last_save >= 30:
+            self._save_meta(force=True)
 
     def _build_snapshot(self) -> dict:
         node = self.node
@@ -342,7 +539,7 @@ class NodeController(QObject):
         last_row = node.storage.block_by_height(height)
         last_time = last_row["timestamp"] if last_row else 0
         name, info = self.default_account()
-        mempool = node.mempool.to_json()
+        mempool = node.mempool.summary()
         api_display_host = node.cfg.api_host
         if api_display_host in ("0.0.0.0", "::", ""):
             api_display_host = "127.0.0.1"
@@ -413,7 +610,7 @@ class NodeController(QObject):
         self.meta["last_scan_height"] = end
 
         mempool_ids = set()
-        for entry in node.mempool.to_json():
+        for entry in node.mempool.summary():
             txid = entry["txid"]
             mempool_ids.add(txid)
             raw = node.mempool.get(bytes.fromhex(txid))
@@ -574,11 +771,17 @@ class NodeController(QObject):
     def is_encrypted(self) -> bool:
         return self._wallet_encrypted
 
-    def unlock_wallet(self, passphrase: str) -> bool:
-        """Decrypt wallet with given passphrase. Returns True on success."""
+    def unlock_wallet(self, passphrase: str, timeout_minutes: int = 0) -> bool:
+        """Decrypt wallet with given passphrase. Returns True on success.
+
+        `timeout_minutes > 0` arms the auto-lock timer (walletpassphrase-style)."""
         try:
             self.wallet = load_wallet(self.wallet_path, passphrase)
             self._passphrase = passphrase
+            if timeout_minutes > 0:
+                self.autolock_minutes = timeout_minutes
+            if self.autolock_minutes > 0:
+                self._autolock_timer.start(self.autolock_minutes * 60_000)
             return True
         except WalletError:
             return False
@@ -587,6 +790,22 @@ class NodeController(QObject):
         """Clear in-memory decrypted wallet keys."""
         self._passphrase = None
         self.wallet = {}
+        self._autolock_timer.stop()
+
+    def _on_autolock(self):
+        if self.is_encrypted() and not self.is_locked():
+            self.lock_wallet()
+
+    def set_autolock(self, minutes: int):
+        """Configure auto-lock (0 disables). Persists in meta."""
+        minutes = max(0, int(minutes))
+        self.autolock_minutes = minutes
+        self.meta["autolock_minutes"] = minutes
+        self._save_meta(force=True)
+        if minutes > 0 and not self.is_locked():
+            self._autolock_timer.start(minutes * 60_000)
+        else:
+            self._autolock_timer.stop()
 
     def encrypt_wallet_with(self, passphrase: str):
         """Encrypt (or re-encrypt) the wallet file."""
@@ -609,11 +828,12 @@ class NodeController(QObject):
             "labels": {},
             "history": [],
             "receive_requests": [],
+            "address_book": [],  # preserved across wallet-file switches
             "default_account": next(iter(new_wallet), ""),
             "fee_tier": 3,
         }
         self._load_meta()
-        self._save_meta()
+        self._save_meta(force=True)
         self.refresh()
 
     # --- send --------------------------------------------------------------
@@ -622,7 +842,7 @@ class NodeController(QObject):
         """All wallet UTXOs (confirmed + mempool change), for coin control."""
         if not self.node:
             return []
-        mempool = self.node.mempool.to_json()
+        mempool = self.node.mempool.summary()
         tip = self.node.storage.height()
         out = []
         for addr in self.addresses():
@@ -639,7 +859,7 @@ class NodeController(QObject):
         """Return UTXOs and balance for a single address (used by AddressDetailDialog)."""
         if not self.node:
             return {"utxos": []}
-        mempool = self.node.mempool.to_json()
+        mempool = self.node.mempool.summary()
         tip = self.node.storage.height()
         confirmed = self.node.chain.utxos_of(address)
         utxos = []
@@ -652,7 +872,7 @@ class NodeController(QObject):
 
     def _spendable_utxos(self) -> list:
         """Confirmed spendable UTXOs merged with mempool change outputs."""
-        mempool = self.node.mempool.to_json()
+        mempool = self.node.mempool.summary()
         utxos = []
         for addr in self.addresses():
             confirmed = self.node.chain.utxos_of(addr)
@@ -695,6 +915,12 @@ class NodeController(QObject):
             raise WalletError(reason)
         if label:
             self.set_label(to_addr, label)
+            known = {info["address"] for info in self.wallet.values()}
+            if to_addr not in known:
+                try:
+                    self.book_add(label, to_addr)
+                except WalletError:
+                    pass
         rec = {
             "txid": txid,
             "type": "send",
@@ -741,6 +967,98 @@ class NodeController(QObject):
     def validate_addr(self, address: str) -> bool:
         return validate_address(address, self.cfg.network_hrp)
 
+    # --- Bitcoin Core-style wallet features ---------------------------------
+
+    _MSG_PREFIX = b"ORI Signed Message:\n"
+
+    def account_for_address(self, address: str):
+        for name, info in self.wallet.items():
+            if isinstance(info, dict) and info.get("address") == address:
+                return name, info
+        return None, None
+
+    def sign_message(self, address: str, message: str) -> str:
+        """Sign an arbitrary message with the key owning `address`."""
+        from crypto import sign as _sign
+
+        if self.is_locked():
+            raise WalletError("wallet is locked — unlock it first")
+        _, info = self.account_for_address(address)
+        if not info:
+            raise WalletError("address not found in this wallet")
+        digest = sha256d(self._MSG_PREFIX + message.encode("utf-8"))
+        return _sign(bytes.fromhex(info["priv_hex"]), digest).hex()
+
+    def verify_message(self, address: str, message: str, sig_hex: str) -> bool:
+        """Verify a signed message against any bech32 address."""
+        return self.verify_message_static(address, message, sig_hex)
+
+    def change_passphrase(self, old_pass: str, new_pass: str):
+        """Re-encrypt the wallet under a new passphrase (verifies old first)."""
+        if not self.is_encrypted():
+            raise WalletError("wallet is not encrypted")
+        try:
+            check = load_wallet(self.wallet_path, old_pass)
+        except WalletError as exc:
+            raise WalletError(f"current passphrase is wrong: {exc}")
+        if check != self.wallet and self.wallet:
+            # decrypted contents differ only if file changed externally;
+            # proceed using freshly loaded copy to be safe.
+            self.wallet = check
+        if len(new_pass) < 8:
+            raise WalletError("new passphrase must be at least 8 characters")
+        save_wallet(self.wallet_path, self.wallet, new_pass)
+        self._passphrase = new_pass
+
+    def export_history_csv(self, path: str) -> int:
+        """Export transaction history to CSV. Returns row count."""
+        import csv
+
+        rows = list(self.meta.get("history", []))
+        rows.sort(key=lambda r: (r.get("timestamp", 0), r.get("txid", "")), reverse=True)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["txid", "type", "address", "label", "amount_sats",
+                        "fee_sats", "height", "confirmations", "timestamp_iso",
+                        "mempool"])
+            for r in rows:
+                ts = r.get("timestamp") or 0
+                iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else ""
+                w.writerow([r.get("txid"), r.get("type"), r.get("address"),
+                            r.get("label", ""), r.get("amount_sats", 0),
+                            r.get("fee_sats", 0), r.get("height", ""),
+                            r.get("confirmations", ""), iso,
+                            bool(r.get("mempool"))])
+        return len(rows)
+
+    def dump_private_key(self, address: str) -> tuple:
+        """Return (name, priv_hex) for `address`. Requires unlocked wallet."""
+        if self.is_locked():
+            raise WalletError("wallet is locked — unlock it first")
+        name, info = self.account_for_address(address)
+        if not info:
+            raise WalletError("address not found in this wallet")
+        return name, info["priv_hex"]
+
+    def rescan_from(self, start_height: int = 0):
+        """Force a wallet history rescan starting at `start_height`."""
+        self.meta["last_scan_height"] = max(-1, int(start_height) - 1)
+        self.meta["history"] = []
+        self._last_snapshot_key = None
+        self._save_meta(force=True)
+
+    def disconnect_peer(self, host: str, port: int) -> bool:
+        if not self.node:
+            return False
+        peer = self.node.network.peers.get((host, int(port)))
+        if peer is None:
+            return False
+        peer.close()
+        return True
+
+    def connected_peers_detailed(self) -> list:
+        return self.connected_peers()
+
     def debug_command(self, line: str) -> str:
         if not self.node:
             return "node is not running"
@@ -769,12 +1087,26 @@ class NodeController(QObject):
                 "  getnewaddress (label)\n"
                 "  validateaddress <addr>\n"
                 "  getblock <height|hash>\n"
+                "  getblockhash <height>\n"
                 "  gettransaction <txid>\n"
-                "  getbestblockhash\n"
-                "  getblockcount\n"
-                "  addnode <host> <port>\n"
-                "  uptime"
+                "  getrawmempool [n]\n"
+                "  getbestblockhash | getblockcount | uptime\n"
+                "  addnode <host> <port>\n"                "Wallet:\n"
+                "  encryptwallet | lockwallet | unlockwallet <pass> [minutes]\n"
+                "  walletpassphrasechange <old> <new>\n"
+                "  signmessage <addr> <message>\n"
+                "  verifymessage <addr> <message> <sighex>\n"
+                "  dumpprivkey <addr>\n"
+                "  exportcsv <path>\n"
+                "  rescan [height]\n"
+                "Node:\n"
+                "  stop"
             )
+        if cmd == "stop":
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.instance().quit()
+            return "stopping…"
         if cmd == "getblockchaininfo":
             return json.dumps(node.stats(), indent=2)
         if cmd == "getnetworkinfo":
@@ -788,11 +1120,11 @@ class NodeController(QObject):
         if cmd == "getpeerinfo":
             return json.dumps(self.connected_peers(), indent=2)
         if cmd == "getmempoolinfo":
-            txs = node.mempool.to_json()
+            entries = node.mempool.summary()
             return json.dumps({
-                "size": len(txs),
-                "bytes": sum(t["size"] for t in txs),
-                "total_fee": sum(t["fee"] for t in txs),
+                "size": len(entries),
+                "bytes": sum(t["size"] for t in entries),
+                "total_fee": sum(t["fee"] for t in entries),
             }, indent=2)
         if cmd == "getbalance":
             return format_ori(self._balances()["available"])
@@ -849,6 +1181,121 @@ class NodeController(QObject):
             return "connecting"
         if cmd == "uptime":
             return str(int(time.time() - self._started_at))
+        # ── wallet commands ──────────────────────────────────────────
+        if cmd == "encryptwallet":
+            return "already encrypted" if self.is_encrypted() else \
+                "use File > Encrypt Wallet (interactive passphrase required)"
+        if cmd == "lockwallet":
+            if not self.is_encrypted():
+                return "wallet is not encrypted"
+            self.lock_wallet()
+            return "wallet locked"
+        if cmd == "unlockwallet":
+            if len(args) < 1:
+                return "usage: unlockwallet <passphrase> [timeout_minutes]"
+            minutes = int(args[1]) if len(args) > 1 else 0
+            ok = self.unlock_wallet(args[0], timeout_minutes=minutes)
+            return "wallet unlocked" + (f" (auto-lock in {minutes} min)" if minutes else "") \
+                if ok else "wrong passphrase"
+        if cmd == "walletpassphrasechange":
+            if len(args) < 2:
+                return "usage: walletpassphrasechange <old> <new>"
+            self.change_passphrase(args[0], args[1])
+            return "passphrase changed"
+        if cmd == "signmessage":
+            if len(args) < 2:
+                return "usage: signmessage <addr> <message...>"
+            sig = self.sign_message(args[0], " ".join(args[1:]))
+            return sig
+        if cmd == "verifymessage":
+            if len(args) < 3:
+                return "usage: verifymessage <addr> <message...> <sighex>"
+            msg = " ".join(args[1:-1])
+            ok = self.verify_message(args[0], msg, args[-1])
+            return "true" if ok else "false"
+        if cmd == "dumpprivkey":
+            if not args:
+                return "usage: dumpprivkey <addr>"
+            name, priv = self.dump_private_key(args[0])
+            return f"{priv}   ({name})"
+        if cmd == "exportcsv":
+            if not args:
+                return "usage: exportcsv <path.csv>"
+            n = self.export_history_csv(args[0])
+            return f"exported {n} rows -> {args[0]}"
+        if cmd == "rescan":
+            h = int(args[0]) if args and args[0].isdigit() else 0
+            self.rescan_from(h)
+            return f"rescanning from height {h}"
+        if cmd == "getblockhash":
+            if not args or not args[0].isdigit():
+                return "usage: getblockhash <height>"
+            row = node.storage.block_by_height(int(args[0]))
+            return row["hash"] if row else "not found"
+        if cmd == "getrawmempool":
+            entries = node.mempool.summary()
+            lines = [f"{e['txid']}  fee={e['fee']} rate={e['fee_rate']}" for e in entries]
+            return "\n".join(lines[:50]) + (f"\n… ({len(lines)} total)" if len(lines) > 50 else "") or "empty"
+        if cmd == "getdifficulty":
+            tip = node.chain.tip()
+            return json.dumps({"bits": hex(tip["bits"]),
+                               "difficulty": tip.get("difficulty"),
+                               "next_bits": hex(node.chain.next_bits())}, indent=2)
+        if cmd == "bumpfee":
+            if len(args) != 2:
+                return "usage: bumpfee <txid> <tier>"
+            return json.dumps(self.bump_fee(args[0], int(args[1])), indent=2)
+        # ── legacy console aliases ───────────────────────────────────
+        if cmd == "getinfo":
+            return json.dumps({
+                "version": f"ORI Core v{VERSION}",
+                "blocks": node.storage.height(),
+                "difficulty": node.chain.tip()["difficulty"],
+                "connections": node.network.peer_count(),
+                "mempool_size": node.mempool.size(),
+            }, indent=2)
+        if cmd == "getblocktime":
+            return str(node.cfg.block_time_seconds)
+        if cmd == "getsupply":
+            return str(node.chain.utxo.total_supply())
+        if cmd == "getutxo":
+            if len(args) != 2:
+                return "usage: getutxo <txid> <vout>"
+            val = node.chain.utxo.get(bytes.fromhex(args[0]), int(args[1]))
+            if val is None:
+                return "UTXO not found (or already spent)"
+            addr, amount, height, cb = val
+            return json.dumps({"height": height, "value_sats": amount,
+                               "address": addr, "coinbase": cb}, indent=2)
+        if cmd == "listunspent":
+            _, acc = self.default_account()
+            if not acc:
+                return "no default wallet account"
+            return json.dumps(node.chain.utxos_of(acc["address"]), indent=2)
+        if cmd == "sendrawtransaction":
+            if not args:
+                return "usage: sendrawtransaction <hex>"
+            ok, msg, txid = node.submit_raw_tx(args[0])
+            return f"OK. TxID: {txid}" if ok else f"Error: {msg}"
+        if cmd == "decoderawtransaction":
+            from tx import Transaction as _Tx
+
+            if not args:
+                return "usage: decoderawtransaction <hex>"
+            try:
+                tx = _Tx.from_hex(args[0])
+                return json.dumps({
+                    "txid": tx.txid().hex(), "version": tx.version,
+                    "locktime": tx.locktime, "coinbase": tx.is_coinbase(),
+                    "size": len(tx.serialize()),
+                    "inputs": [{"prev_txid": i.prev_txid.hex(), "prev_vout": i.prev_vout}
+                               for i in tx.inputs],
+                    "outputs": [{"vout": n, "value": o.value,
+                                 "script_pubkey": o.script_pubkey.decode(errors="replace")}
+                                for n, o in enumerate(tx.outputs)],
+                }, indent=2)
+            except Exception as exc:
+                return f"decode failed: {exc}"
         return f"unknown command '{cmd}' (type help)"
 
 

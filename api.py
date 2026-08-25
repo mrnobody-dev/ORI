@@ -3,7 +3,7 @@ import ipaddress
 import secrets
 import time
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from tx import NULL_HASH
@@ -47,6 +47,8 @@ def create_app(node, lifespan=None):
         return not ip.is_loopback
 
     def _check_api_token(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+        import hmac as _hmac
+
         token = node.cfg.api_token or ""
         if not token:
             if node.cfg.require_api_token_when_public and _api_bind_is_public():
@@ -59,9 +61,31 @@ def create_app(node, lifespan=None):
                 )
                 raise HTTPException(status_code=403, detail="api token required for public bind")
             return
+        # Compare digests of equal fixed length: no length/timing leak.
         provided = x_api_key or ""
-        if len(provided) != len(token) or not secrets.compare_digest(provided, token):
+        ok = _hmac.compare_digest(
+            __import__("hashlib").sha256(provided.encode()).digest(),
+            __import__("hashlib").sha256(token.encode()).digest(),
+        )
+        if not ok:
             raise HTTPException(status_code=401, detail="unauthorized")
+
+    # ─────────────────────────────────────────────────────────────
+    # Lightweight per-IP rate limiter for expensive read endpoints
+    # ─────────────────────────────────────────────────────────────
+
+    _rl_hits: dict[str, list[float]] = {}
+    _RL_WINDOW = 60.0
+    _RL_DEFAULT = 120          # requests/minute/IP for normal reads
+    _RL_HEAVY = 10             # requests/minute/IP for full-chain endpoints
+
+    def _rate_limit(request_scope_key: str, limit: int):
+        now_ts = time.monotonic()
+        hits = _rl_hits.setdefault(request_scope_key, [])
+        hits[:] = [t for t in hits if now_ts - t < _RL_WINDOW]
+        if len(hits) >= limit:
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+        hits.append(now_ts)
 
     # ─────────────────────────────────────────────────────────────
     # Root / info
@@ -134,9 +158,11 @@ def create_app(node, lifespan=None):
 
     @app.get("/blockchain/", summary="Full block list (paginated)", tags=["Blockchain"])
     def get_blockchain(
+        request: Request,
         start: int = Query(0, ge=0, description="Start height (inclusive)"),
         limit: int = Query(50, ge=1, le=500, description="Max blocks to return"),
     ):
+        _rate_limit(f"chain:{request.client.host if request.client else '?'}", _RL_DEFAULT)
         tip = node.storage.height()
         rows = list(node.storage.iterate_from(start, limit=limit))
         blocks = []
@@ -184,7 +210,9 @@ def create_app(node, lifespan=None):
         return block.to_dict(h)
 
     @app.get("/validate/", summary="Full chain validation", tags=["Blockchain"])
-    def validate_chain():
+    def validate_chain(request: Request, _: None = Depends(_check_api_token)):
+        # Full ECDSA replay is expensive — token-protected + rate limited.
+        _rate_limit(f"validate:{request.client.host if request.client else '?'}", _RL_HEAVY)
         return {"valid": node.validate_full()}
 
     # ─────────────────────────────────────────────────────────────
@@ -307,52 +335,64 @@ def create_app(node, lifespan=None):
     # ─────────────────────────────────────────────────────────────
 
     @app.get("/address/{address}", summary="Address balance and UTXOs", tags=["Wallet"])
-    def get_address(address: str):
+    def get_address(address: str, request: Request):
+        _rate_limit(f"addr:{request.client.host if request.client else '?'}", _RL_DEFAULT)
         utxos = node.chain.utxos_of(address)
         history = []
         total_received = 0
         total_spent = 0
-        for row in node.storage.all_blocks():
-            block = node.chain._parse_row(row)
-            for tx in block.transactions:
-                txid = tx.txid().hex()
-                received = sum(o.value for o in tx.outputs if o.script_pubkey.decode(errors="replace") == address)
-                spent = 0
-                for txin in tx.inputs:
-                    if txin.prev_txid == NULL_HASH:
-                        continue
-                    prev = node.chain.get_tx(txin.prev_txid.hex())
-                    if not prev:
-                        continue
-                    prev_tx, _ = prev
-                    if txin.prev_vout < len(prev_tx.outputs):
-                        out = prev_tx.outputs[txin.prev_vout]
-                        if out.script_pubkey.decode(errors="replace") == address:
-                            spent += out.value
-                if received or spent:
-                    total_received += received
-                    total_spent += spent
-                    history.append({
-                        "txid": txid,
-                        "height": row["height"],
-                        "timestamp": row["timestamp"],
-                        "received_sats": received,
-                        "spent_sats": spent,
-                        "net_sats": received - spent,
-                        "mempool": False,
-                    })
-        for entry in node.mempool.to_json():
-            received = sum(o.get("value", 0) for o in entry.get("outputs", []) if o.get("script_pubkey") == address)
-            if received:
-                history.append({
-                    "txid": entry["txid"],
-                    "height": None,
-                    "timestamp": entry.get("timestamp"),
-                    "received_sats": received,
-                    "spent_sats": 0,
-                    "net_sats": received,
-                    "mempool": True,
-                })
+        # Fast path: in-memory address index (O(address history), not O(chain)).
+        for entry in node.chain.address_history(address):
+            found = node.chain.get_tx(entry["txid"])
+            if not found:
+                continue
+            tx, meta = found
+            received = sum(
+                o.value for o in tx.outputs
+                if o.script_pubkey.decode(errors="replace") == address
+            )
+            spent = 0
+            for txin in tx.inputs:
+                if txin.prev_txid == NULL_HASH:
+                    continue
+                prev = node.chain.get_tx(txin.prev_txid.hex())
+                if not prev:
+                    continue
+                prev_tx, _ = prev
+                if txin.prev_vout < len(prev_tx.outputs):
+                    out = prev_tx.outputs[txin.prev_vout]
+                    if out.script_pubkey.decode(errors="replace") == address:
+                        spent += out.value
+            b_row = node.storage.block_by_height(meta["height"])
+            ts = b_row["timestamp"] if b_row else None
+            history.append({
+                "txid": entry["txid"],
+                "height": meta["height"],
+                "timestamp": ts,
+                "received_sats": received,
+                "spent_sats": spent,
+                "net_sats": received - spent,
+                "mempool": False,
+            })
+            total_received += received
+            total_spent += spent
+        # Unconfirmed: mempool summary (no hex serialization).
+        for m_entry in node.mempool.summary():
+            received = sum(
+                o.get("value", 0) for o in m_entry.get("outputs", [])
+                if o.get("script_pubkey") == address
+            )
+            if not received:
+                continue
+            history.append({
+                "txid": m_entry["txid"],
+                "height": None,
+                "timestamp": m_entry.get("timestamp"),
+                "received_sats": received,
+                "spent_sats": 0,
+                "net_sats": received,
+                "mempool": True,
+            })
         history.sort(key=lambda x: (x.get("timestamp") or 0, x.get("txid") or ""), reverse=True)
         return {
             "address": address,
@@ -421,17 +461,19 @@ def create_app(node, lifespan=None):
     # ─────────────────────────────────────────────────────────────
 
     @app.get("/mempool/", summary="Mempool transactions", tags=["Mempool"])
-    def get_mempool():
+    def get_mempool(request: Request):
+        _rate_limit(f"mempool:{request.client.host if request.client else '?'}", _RL_DEFAULT)
         txs = node.mempool.to_json()
         return {"count": node.mempool.size(), "txs": txs}
 
     @app.get("/mempool/info", summary="Mempool statistics", tags=["Mempool"])
     def get_mempool_info():
-        txs = node.mempool.to_json()
-        total_bytes = sum(t["size"] for t in txs)
-        total_fee = sum(t["fee"] for t in txs)
+        # Summary path: no hex serialization — cheap even on a large pool.
+        entries = node.mempool.summary()
+        total_bytes = sum(t["size"] for t in entries)
+        total_fee = sum(t["fee"] for t in entries)
         return {
-            "size": len(txs),
+            "size": len(entries),
             "bytes": total_bytes,
             "total_fee_sats": total_fee,
             "avg_fee_rate": round(total_fee / max(total_bytes, 1), 4),

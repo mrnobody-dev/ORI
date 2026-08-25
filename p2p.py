@@ -86,6 +86,8 @@ class Peer(threading.Thread):
         self.peer_best = None
         self.handshake_complete = False
         self.requested = set()
+        self._requested_at = {}
+        self.REQUESTED_TTL = 600  # forget unanswered inv requests after 10 min
         self.pending_children = {}
         self.expected_headers_from = None
         self.disconnect_reason = ""
@@ -271,8 +273,25 @@ class Peer(threading.Thread):
             
             self._dispatch(cmd, payload)
 
+    def _prune_requested(self):
+        """Drop stale inv requests so the 1000-item cap can never wedge sync."""
+        cutoff = now() - self.REQUESTED_TTL
+        stale = [k for k, t in self._requested_at.items() if t < cutoff]
+        for k in stale:
+            self._requested_at.pop(k, None)
+            self.requested.discard(k)
+
     def _dispatch(self, cmd: str, payload: bytes):
         self.last_seen = now()
+        # Handshake gate: refuse everything except version/ping/pong until
+        # verack completes (Bitcoin Core rule). Prevents anonymous resource
+        # drain before the peer identifies itself.
+        if not self.handshake_complete and cmd not in ("version", "ping", "pong"):
+            self._add_ban_score("protocol_violation")
+            logger.warn(LogCategory.P2P, "Message before handshake - rejected",
+                        peer=_peer_label(self.addr), msg=cmd)
+            self.close()
+            return
         if now() - self._hb_log_at >= 120:
             self._hb_log_at = now()
             logger.debug(LogCategory.P2P, "Heartbeat", 
@@ -319,6 +338,7 @@ class Peer(threading.Thread):
                 self.network.reply_item(self, item)
         elif cmd == "inv":
             data = json.loads(payload)
+            self._prune_requested()
             wanted = []
             for item in data.get("items", []):
                 if len(self.requested) >= 1000:
@@ -327,6 +347,7 @@ class Peer(threading.Thread):
                 if self.network.node.knows(item) or key in self.requested:
                     continue
                 self.requested.add(key)
+                self._requested_at[key] = now()
                 wanted.append(item)
             if wanted:
                 self.send("getdata", json.dumps({"items": wanted}).encode())
@@ -940,7 +961,13 @@ class Network:
             self.known.add((host, port))
         return True
 
+    MAX_KNOWN_PEERS = 2500
+    MAX_ADDR_ITEMS = 64
+
     def learn_peers(self, peers: list):
+        if not isinstance(peers, list) or len(peers) > self.MAX_ADDR_ITEMS:
+            logger.warn(LogCategory.P2P, "Addr message rejected - size", items=len(peers) if isinstance(peers, list) else -1)
+            return
         fresh = []
         for p in peers:
             if not isinstance(p, dict):
@@ -963,6 +990,8 @@ class Network:
             ):
                 continue
             with self._lock:
+                if len(self.known) >= self.MAX_KNOWN_PEERS and (host, port) not in self.known:
+                    continue  # bounded peer table — never grows without limit
                 if (host, port) in self.known:
                     continue
                 if self._is_banned((host, port)):
@@ -971,7 +1000,15 @@ class Network:
                 fresh.append((host, port))
         if fresh:
             logger.info(LogCategory.P2P, "Learned peers from addr relay", count=len(fresh))
+        # Throttled: reuse the global outbound rate limiter instead of
+        # spawning unbounded connect threads per addr message.
+        delay = 1.0 / max(self.cfg.p2p_connection_rate_limit, 0.1)
         for host, port in fresh[:8]:
+            now_ts = time.time()
+            wait = self._last_outbound_connect + delay - now_ts
+            if wait > 0:
+                time.sleep(min(wait, 5.0))
+            self._last_outbound_connect = time.time()
             threading.Thread(target=self.connect, args=(host, port), daemon=True).start()
 
     def broadcast(self, command: str, payload: bytes, exclude=None):
@@ -1050,28 +1087,28 @@ class Network:
     def request_block(self, peer: Peer, block_hash_hex: str):
         payload = json.dumps({"items": [{"type": "block", "hash": block_hash_hex}]})
         peer.requested.add(("block", block_hash_hex))
+        peer._requested_at[("block", block_hash_hex)] = now()
         logger.debug(LogCategory.SYNC, "Requesting block", peer=_peer_label(peer.addr), block_hash=block_hash_hex)
         peer.send("getdata", payload.encode())
 
     def reply_blocks(self, peer: Peer, from_hash: str, stop_hash: str):
+        """Stream block inventory by height — O(window), never O(chain)."""
         node = self.node
-        rows = node.storage.all_blocks()
+        start = 1
+        if from_hash:
+            from_height = node.storage.chain_height_of(from_hash)
+            if from_height is None:
+                # Requester's tip not found (diverged chain): serve from block 1
+                # so the requester can build forward.
+                start = 1
+            else:
+                start = from_height + 1
+        rows = node.storage.iterate_from(start, limit=500)
         hashes = []
-        start = None
-        for i, row in enumerate(rows):
-            if row["hash"] == from_hash:
-                start = i + 1
+        for row in rows:
+            if stop_hash and stop_hash != "0" * 64 and row["hash"] == stop_hash:
                 break
-        if start is None:
-            # Requester's tip not found in our chain (different/diverged chain).
-            # Serve from block 1 onward so the requester can build the fork
-            # forward instead of being forced into a slow backward traversal.
-            hashes = [r["hash"] for r in rows[1:501]]
-        else:
-            for row in rows[start : start + 500]:
-                if stop_hash and stop_hash != "0" * 64 and row["hash"] == stop_hash:
-                    break
-                hashes.append(row["hash"])
+            hashes.append(row["hash"])
         items = [{"type": "block", "hash": h} for h in hashes]
         if not items:
             items = [{"type": "tx", "hash": "0"}]
@@ -1079,22 +1116,20 @@ class Network:
         peer.send("inv", json.dumps({"items": items}).encode())
 
     def reply_headers(self, peer: Peer, from_hash: str, stop_hash: str, count: int = 2000):
+        """Stream headers by height window — O(window) instead of loading the
+        entire chain into memory per request."""
         node = self.node
-        rows = node.storage.all_blocks()
-        headers = []
-        start = None
-        for i, row in enumerate(rows):
-            if row["hash"] == from_hash:
-                start = i + 1
-                break
-        if start is None:
-            start = 1
+        start = 1
+        if from_hash:
+            from_height = node.storage.chain_height_of(from_hash)
+            if from_height is not None:
+                start = from_height + 1
         bounded_count = max(0, min(int(count or 2000), 2000))
-        for row in rows[start : start + bounded_count]:
+        headers = []
+        for row in node.storage.iterate_from(start, limit=bounded_count):
             if stop_hash and stop_hash != "0" * 64 and row["hash"] == stop_hash:
                 break
-            block = Block.from_bytes(row["raw"])
-            headers.append(block.header.to_hex())
+            headers.append(BlockHeader.parse(row["raw"], 0)[0].to_hex())
         logger.info(LogCategory.SYNC, "Replying headers", peer=_peer_label(peer.addr), count=len(headers), from_hash=from_hash)
         peer.send("headers", json.dumps({"headers": headers}).encode())
 
@@ -1108,7 +1143,16 @@ class Network:
         chain = self.node.chain
         first_height = chain.storage.height() + 1
         expected_parent = peer.expected_headers_from or chain.tip()["hash"]
-        history_rows = list(chain.storage.all_blocks())
+        # Difficulty window via bounded walk-back from the locator (≤60 rows),
+        # NOT a full-chain load (which made sync O(N) per batch).
+        history_rows = []
+        cur = self.node.storage.block_by_hash(expected_parent)
+        for _ in range(chain.cfg.retarget_interval):
+            if cur is None:
+                break
+            history_rows.append(cur)
+            cur = self.node.storage.block_by_hash(cur["prev_hash"])
+        history_rows.reverse()
         parent_row = history_rows[-1] if history_rows else None
         for h_hex in headers_hex:
             try:
@@ -1187,10 +1231,10 @@ class Network:
         for i, (block_hash, _header) in enumerate(headers):
             buckets[i % len(peers)].append(block_hash)
 
-        for bucket in buckets:
+        for peer_idx, bucket in enumerate(buckets):
             for start in range(0, len(bucket), GETDATA_BATCH):
                 chunk = bucket[start : start + GETDATA_BATCH]
-                peer = peers[buckets.index(bucket) % len(peers)]
+                peer = peers[peer_idx % len(peers)]
                 if not peer._alive:
                     continue
                 items = [{"type": "block", "hash": h} for h in chunk]

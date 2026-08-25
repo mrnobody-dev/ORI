@@ -48,7 +48,7 @@ def test_mempool_rejects_too_deep_ancestor_chain():
             [TxOut(1000 - i, b"ori1qtestaddress0000000000000000000000000")],
             0,
         )
-        ok = mempool.add(tx, fee=10)
+        ok, _reason = mempool.add(tx, fee=10)
         accepted.append(ok)
         prev_txid = tx.txid()
         prev_vout = 0
@@ -62,7 +62,9 @@ def test_mempool_rejects_too_deep_ancestor_chain():
         0,
     )
 
-    assert mempool.add(too_deep, fee=10) is False
+    added, reason = mempool.add(too_deep, fee=10)
+    assert added is False
+    assert "ancestors" in reason
 
 
 def test_headers_must_connect_to_requested_locator(tmp_path):

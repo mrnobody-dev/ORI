@@ -46,6 +46,12 @@ class SendPage(QWidget):
 
         self.pay_to = QLineEdit()
         self.pay_to.setPlaceholderText("ori1…")
+        pay_row = QHBoxLayout()
+        pay_row.addWidget(self.pay_to, 1)
+        self.btn_book = QPushButton("Address &Book…")
+        self.btn_book.setAutoDefault(False)
+        self.btn_book.setToolTip("Pick a saved contact — double-click or 'Use in Send' fills this field")
+        pay_row.addWidget(self.btn_book)
         self.label_edit = QLineEdit()
         self.label_edit.setPlaceholderText("Enter a label for this address to add it to your address book")
 
@@ -76,7 +82,7 @@ class SendPage(QWidget):
         inputs_row.addWidget(self.auto_lbl)
         inputs_row.addStretch(1)
 
-        form.addRow("Pay &To:", self.pay_to)
+        form.addRow("Pay &To:", pay_row)
         form.addRow("&Label:", self.label_edit)
         form.addRow("&Amount:", amt_row)
         form.addRow("", self.subtract_fee)
@@ -113,6 +119,7 @@ class SendPage(QWidget):
         self.btn_send.clicked.connect(self._send)
         self.btn_max.clicked.connect(self._use_max)
         self.btn_inputs.clicked.connect(self._pick_inputs)
+        self.btn_book.clicked.connect(self._pick_from_book)
         self.amount.valueChanged.connect(self._preview)
         self.pay_to.textChanged.connect(self._preview)
         self.tier.currentIndexChanged.connect(self._preview)
@@ -172,6 +179,13 @@ class SendPage(QWidget):
             self._utxo_sel = dlg.selected_keys()
             self._update_auto_label()
             self._preview()
+
+    def _pick_from_book(self):
+        from qt.dialogs import AddressBookDialog
+        dlg = AddressBookDialog(self.controller, self)
+        dlg.contactPicked.connect(self.pay_to.setText)
+        dlg.tabs.setCurrentIndex(1)
+        dlg.exec()
 
     def clear(self):
         self.pay_to.clear()

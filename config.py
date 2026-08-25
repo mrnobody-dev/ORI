@@ -53,6 +53,7 @@ class Config:
     p2p_inbound_rate_limit_per_subnet: int = 3
     p2p_peer_log_interval_seconds: int = 60
     max_mempool_txs: int = 100_000
+    max_side_branch_blocks: int = 512
     low_s_activation_height: int = 53
     network_magic: bytes = b"\x4f\x52\x49\x31"
     max_money_sats: int = 19_460_000_000_000_000

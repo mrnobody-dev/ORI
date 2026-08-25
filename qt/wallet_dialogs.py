@@ -20,6 +20,20 @@ from PySide6.QtWidgets import (
 from wallet import WalletError
 
 
+def _network_hrp() -> str:
+    """Resolve the active network hrp from env/config (no controller needed)."""
+    from config import Config
+
+    try:
+        return Config.from_env().network_hrp
+    except Exception:
+        return "ori"
+
+
+def _hrp() -> str:
+    return _network_hrp()
+
+
 def _hline():
     f = QFrame()
     f.setFrameShape(QFrame.Shape.HLine)
@@ -319,14 +333,15 @@ class NewWalletCreatedDialog(QDialog):
 class BumpFeeDialog(QDialog):
     """Dialog to choose new fee tier for RBF bump."""
 
-    def __init__(self, txid: str, current_tier: int = 5, parent=None):
+    def __init__(self, txid: str, current_tier: int = 5, parent=None, cfg=None):
         super().__init__(parent)
         self.setWindowTitle("Bump Transaction Fee (RBF)")
         self.setMinimumWidth(460)
         self._new_tier = None
 
         from config import Config
-        cfg = Config()
+
+        cfg = cfg or Config()
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -385,3 +400,246 @@ class BumpFeeDialog(QDialog):
 
     def new_tier(self) -> int | None:
         return self._new_tier
+
+
+class AddressBookEntryDialog(QDialog):
+    """Simple form to add/edit an address book contact."""
+
+    def __init__(self, parent=None, address: str = "", label: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Address Book Entry")
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.label_edit = QLineEdit(label)
+        self.label_edit.setPlaceholderText("e.g. Alice, Exchange, Savings")
+        self.addr_edit = QLineEdit(address)
+        self.addr_edit.setPlaceholderText("ori1…")
+        if address:
+            self.addr_edit.setEnabled(False)
+        form.addRow("&Label:", self.label_edit)
+        form.addRow("&Address:", self.addr_edit)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept(self):
+        from bech32 import validate_address
+        addr = self.address_text()
+        if not validate_address(addr, self._hrp()):
+            QMessageBox.warning(
+                self, "Invalid Address",
+                "That is not a valid ORI (ori1…) address.",
+            )
+            return
+        self.accept()
+
+    def label_text(self) -> str:
+        return self.label_edit.text().strip()
+
+    def address_text(self) -> str:
+        return self.addr_edit.text().strip()
+
+
+# ---------------------------------------------------------------------------
+# Bitcoin Core parity dialogs (change passphrase, sign/verify message)
+# ---------------------------------------------------------------------------
+
+class ChangePassphraseDialog(QDialog):
+    """walletpassphrasechange: verify current passphrase, set a new one."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Change Passphrase")
+        self.setMinimumWidth(480)
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            "Enter the CURRENT passphrase to authorize the change, "
+            "then choose a NEW passphrase."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.cur = QLineEdit()
+        self.cur.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Current passphrase:", self.cur)
+        self.form_new = _PassphraseForm(confirm=True)
+        form.addRow(self.form_new)
+        layout.addLayout(form)
+        layout.addWidget(_hline())
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept(self):
+        if len(self.cur.text()) < 1:
+            QMessageBox.warning(self, "Change Passphrase", "Enter the current passphrase.")
+            return
+        err = self.form_new.validate()
+        if err:
+            QMessageBox.warning(self, "Change Passphrase", err)
+            return
+        self.accept()
+
+    def current_passphrase(self) -> str:
+        return self.cur.text()
+
+    def new_passphrase(self) -> str:
+        return self.form_new.passphrase()
+
+
+class UnlockTimeoutDialog(QDialog):
+    """Unlock with optional auto-lock timeout (like walletpassphrase <n>)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Unlock Wallet")
+        self.setMinimumWidth(440)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "The wallet is encrypted. Enter the passphrase to unlock it.\n"
+            "Optionally auto-relock after N minutes (0 = stay unlocked)."
+        ))
+        form = QFormLayout()
+        self.pw = QLineEdit()
+        self.pw.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Passphrase:", self.pw)
+        from PySide6.QtWidgets import QSpinBox
+        self.minutes = QSpinBox()
+        self.minutes.setRange(0, 10080)
+        self.minutes.setValue(10)
+        form.addRow("Auto-lock after (minutes):", self.minutes)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def passphrase(self) -> str:
+        return self.pw.text()
+
+    def timeout_minutes(self) -> int:
+        return self.minutes.value()
+
+
+class SignMessageDialog(QDialog):
+    """signmessage: produce a hex signature for an owned address."""
+
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+        self.setWindowTitle("Sign Message")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        warn = QLabel(
+            "Signing a message proves you own an address, but can also reveal "
+            "information about your transactions. Only sign what you understand."
+        )
+        warn.setObjectName("negative")
+        warn.setWordWrap(True)
+        layout.addWidget(warn)
+
+        form = QFormLayout()
+        from PySide6.QtWidgets import QComboBox
+        self.addr = QComboBox()
+        for name, info in controller.accounts():
+            self.addr.addItem(f"{info['address']}  ({name})", info["address"])
+        form.addRow("Address:", self.addr)
+        self.msg = QLineEdit()
+        form.addRow("Message:", self.msg)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Close
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Sign")
+        btns.accepted.connect(self._sign)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self.result_lbl = QLabel("")
+        self.result_lbl.setWordWrap(True)
+        self.result_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.result_lbl)
+
+    def _sign(self):
+        try:
+            sig = self.controller.sign_message(
+                self.addr.currentData(), self.msg.text().strip()
+            )
+            self.result_lbl.setText(sig)
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(sig)
+            QMessageBox.information(self, "Sign Message", "Signature copied to clipboard.")
+        except WalletError as exc:
+            QMessageBox.warning(self, "Sign Message", str(exc))
+
+
+class VerifyMessageDialog(QDialog):
+    """verifymessage: check a signature against any address."""
+
+    @staticmethod
+    def verify(controller_cls_prefix, address, message, sig_hex):
+        return False
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Verify Message")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.addr = QLineEdit()
+        self.addr.setPlaceholderText("ori1 address that supposedly signed")
+        form.addRow("Address:", self.addr)
+        self.msg = QLineEdit()
+        form.addRow("Message:", self.msg)
+        self.sig = QLineEdit()
+        self.sig.setPlaceholderText("signature (hex)")
+        form.addRow("Signature:", self.sig)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Close
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Verify")
+        btns.accepted.connect(self._verify)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _verify(self):
+        from bech32 import validate_address
+        from qt.controller import NodeController
+
+        addr = self.addr.text().strip()
+        if not validate_address(addr, self._hrp()):
+            QMessageBox.warning(self, "Verify Message", "Invalid ORI address.")
+            return
+        ok = NodeController.verify_message_static(
+            addr, self.msg.text().strip(), self.sig.text().strip()
+        )
+        if ok:
+            QMessageBox.information(
+                self, "Verify Message",
+                "Message verified:\n\nThe signature matches the address.",
+            )
+        else:
+            QMessageBox.warning(
+                self, "Verify Message",
+                "Message verification failed:\nSignature does NOT match.",
+            )

@@ -1,4 +1,4 @@
-import math
+﻿import math
 import os
 import threading
 import time
@@ -269,7 +269,10 @@ class Node:
         with self._lock:
             ok, reason, height = self.chain.add_block(block, source="miner")
             if ok:
-                self.mempool.remove_spent(block.transactions)
+                self.mempool.remove_spent(
+                    block.transactions,
+                    chain_has_output=self.chain.utxo.contains
+                )
                 if reason == "reorg":
                     self._revalidate_mempool()
         self._log_block_result("miner", block, ok, reason, height)
@@ -295,7 +298,10 @@ class Node:
             ok, reason, height = self.chain.add_block(block, source="peer")
             if ok or reason == "weak fork stored as side branch":
                 if ok:
-                    self.mempool.remove_spent(block.transactions)
+                    self.mempool.remove_spent(
+                    block.transactions,
+                    chain_has_output=self.chain.utxo.contains
+                )
                     if reason == "reorg":
                         self._revalidate_mempool()
         self._log_block_result("peer", block, ok, reason, height)
@@ -303,6 +309,10 @@ class Node:
         if not ok and reason != "weak fork stored as side branch":
             if reason == "unknown parent":
                 parent = hexstr(block.header.prev_hash)
+                # Cap per-peer orphan tracking â€” unbounded growth is a memory DoS.
+                MAX_PENDING_CHILDREN = 128
+                if len(peer.pending_children) >= MAX_PENDING_CHILDREN:
+                    peer.pending_children.pop(next(iter(peer.pending_children)))
                 peer.pending_children[block_hash] = parent
                 self.network.request_block(peer, parent)
             elif reason == "gap in chain":
@@ -322,23 +332,33 @@ class Node:
             self.network.broadcast_inv("block", block_hash, exclude=peer)
         # Continue syncing until the peer's tip. The old condition
         # (height < peer.height) was dead code after the LAST block of a
-        # batch — it compared against the just-updated max, so bulk sync
+        # batch â€” it compared against the just-updated max, so bulk sync
         # stalled after one window and nodes crawled at live-block speed.
         if ok and height is not None and peer.height is not None:
             self.network.schedule_sync_follow_up(peer)
 
     def _revalidate_mempool(self):
-        for tx in list(self.mempool.txids()):
-            raw = self.mempool.get(tx)
+        """Post-reorg revalidation. Builds the mempool overlay ONCE and updates
+        it incrementally as invalid txs are dropped (was O(NÃ—M) rebuilds)."""
+        height = self.chain.storage.height() + 1
+        view = self.mempool.overlay_utxo(self.chain.utxo, height)
+        for tid in list(self.mempool.txids()):
+            raw = self.mempool.get(tid)
             if raw is None:
                 continue
-            ok, _, _ = self.chain.validate_tx(
-                raw,
-                self.mempool.overlay_utxo(self.chain.utxo, self.chain.storage.height() + 1),
-                self.chain.storage.height() + 1,
-            )
+            ok, _, _ = self.chain.validate_tx(raw, view, height)
             if not ok:
-                self.mempool.remove_txid(tx)
+                # Drop tx AND everything that depends on it, then mirror the
+                # removal into the view so later checks stay accurate.
+                doomed = {tid}
+                with self.mempool._lock:
+                    desc = self.mempool._descendants.get(tid, set())
+                    doomed |= {d for d in desc if d in self.mempool._txs} if hasattr(self.mempool, "_descendants") else set()
+                for d in doomed:
+                    dtx = self.mempool.get(d)
+                    self.mempool.remove_txid(d)
+                    if dtx is not None:
+                        view.remove_tx(dtx)
 
     @staticmethod
     def _discard_pending_block(peer, block_hex: str):
@@ -432,3 +452,4 @@ class Node:
             replay.count() == self.chain.utxo.count()
             and replay.total_supply() == self.chain.utxo.total_supply()
         )
+

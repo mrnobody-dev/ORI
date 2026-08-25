@@ -42,6 +42,8 @@ class ReceivePage(QWidget):
 
         self.addr_box = QGroupBox("Receiving address")
         av = QVBoxLayout(self.addr_box)
+        addr_row = QHBoxLayout()
+        left_col = QVBoxLayout()
         self.address = QLineEdit()
         self.address.setReadOnly(True)
         self.address.setMinimumHeight(32)
@@ -58,11 +60,20 @@ class ReceivePage(QWidget):
         row.addWidget(self.btn_new)
         row.addStretch(1)
         row.addWidget(self.btn_request)
-        av.addWidget(self.address)
-        av.addLayout(row)
-        hint = QLabel("Share this ori1… address to receive payments. Logo/QR can be added later.")
+        left_col.addWidget(self.address)
+        left_col.addLayout(row)
+        hint = QLabel("Share this ori1… address to receive payments.")
         hint.setObjectName("muted")
-        av.addWidget(hint)
+        left_col.addWidget(hint)
+        addr_row.addLayout(left_col, 1)
+
+        # Inline QR code for the current receiving address.
+        self.qr_label = QLabel()
+        self.qr_label.setFixedSize(150, 150)
+        self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.qr_label.setObjectName("qrBox")
+        addr_row.addWidget(self.qr_label)
+        av.addLayout(addr_row)
 
         hist = QGroupBox("Requested payments history")
         hv = QVBoxLayout(hist)
@@ -89,6 +100,28 @@ class ReceivePage(QWidget):
         if not self.address.text():
             self.address.setText(snap.get("default_address", ""))
         self._fill_requests(snap.get("receive_requests", []))
+        self._update_qr()
+
+    def _update_qr(self):
+        addr = self.address.text().strip()
+        if not addr:
+            self.qr_label.setText("")
+            return
+        try:
+            import qrcode
+            from PySide6.QtGui import QImage, QPixmap
+
+            img = qrcode.make(f"ori:{addr}")
+            qimg = QImage(img.tobytes(), img.size[0], img.size[1],
+                          QImage.Format.Format_Grayscale8)
+            pix = QPixmap.fromImage(qimg).scaled(
+                140, 140,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.qr_label.setPixmap(pix)
+        except Exception:
+            self.qr_label.setText("QR\nn/a")
 
     def _fill_requests(self, rows: list):
         self.table.setRowCount(len(rows))
@@ -115,6 +148,7 @@ class ReceivePage(QWidget):
     def _new_addr(self):
         name, info = self.controller.new_receiving_address(self.label_edit.text().strip())
         self.address.setText(info["address"])
+        self._update_qr()
         QMessageBox.information(
             self,
             "New receiving address",
@@ -123,6 +157,7 @@ class ReceivePage(QWidget):
 
     def _request(self):
         import time
+        from urllib.parse import quote
 
         addr = self.address.text().strip()
         if not addr:
@@ -138,9 +173,9 @@ class ReceivePage(QWidget):
         if amount:
             params.append(f"amount={amount:.8f}".rstrip("0").rstrip("."))
         if label:
-            params.append("label=" + label)
+            params.append("label=" + quote(label))
         if self.message.text().strip():
-            params.append("message=" + self.message.text().strip())
+            params.append("message=" + quote(self.message.text().strip()))
         if params:
             uri += "?" + "&".join(params)
         self.controller.add_receive_request({

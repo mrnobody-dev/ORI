@@ -28,6 +28,8 @@ class Blockchain:
         self.storage = storage
         self.utxo = UTXOSet()
         self.tx_index = {}
+        self.addr_index = {}   # address -> {txid_hex: {"height","block_hash","position"}}
+        self.out_addr_map = {}  # txid_hex -> {vout: address}
         self.invalid_blocks = set()
         self._lock = threading.RLock()
         self.genesis = None
@@ -74,13 +76,19 @@ class Blockchain:
     def _rebuild_state(self):
         utxo = UTXOSet()
         index = {}
+        addr_index = {}
+        out_addr_map = {}
         count = 0
         for row in self.storage.all_blocks():
             block = self._parse_row(row)
-            self._apply_unchecked(block, row["height"], utxo, index)
+            self._apply_unchecked(block, row["height"], utxo, index,
+                                  addr_index, out_addr_map)
             count += 1
-        self.utxo = utxo
-        self.tx_index = index
+        with self._lock:
+            self.utxo = utxo
+            self.tx_index = index
+            self.addr_index = addr_index
+            self.out_addr_map = out_addr_map
         logger.info(LogCategory.CHAIN, "Rebuilt UTXO set", 
                    utxo_entries=utxo.count(), 
                    supply_sats=utxo.total_supply(),
@@ -106,14 +114,44 @@ class Blockchain:
             raise ValueError("corrupt stored block")
         return block
 
-    def _apply_unchecked(self, block: Block, height: int, utxo: UTXOSet, index: dict):
-        """Used during chain rebuild from storage. Applies both UTXO and tx_index."""
+    def _apply_unchecked(self, block: Block, height: int, utxo: UTXOSet, index: dict,
+                         addr_index: dict = None, out_addr_map: dict = None):
+        """Used during chain rebuild from storage. Applies UTXO, tx_index and
+        (optionally) address→txid indexes used for fast wallet history.
+
+        Inputs reference strictly older txs, so payer addresses resolve from
+        `out_addr_map` built chronologically in the same pass."""
+        bh = hexstr(block.hash())
         for i, tx in enumerate(block.transactions):
+            tid_hex = tx.txid().hex()
             utxo.remove_tx(tx)
+            if addr_index is not None:
+                # 1) attribute spends to the addresses that own each input
+                for txin in tx.inputs:
+                    if txin.prev_txid == b"\x00" * 32:
+                        continue
+                    owner = out_addr_map.get(txin.prev_txid.hex(), {}).get(txin.prev_vout)
+                    if owner:
+                        addr_index.setdefault(owner, {})[tid_hex] = {
+                            "height": height,
+                            "block_hash": bh,
+                            "position": i,
+                        }
+                # 2) record this tx's output owners
+                out_addr_map[tid_hex] = {
+                    vout: txout.script_pubkey.decode(errors="replace")
+                    for vout, txout in enumerate(tx.outputs)
+                }
+                for vout, a in out_addr_map[tid_hex].items():
+                    addr_index.setdefault(a, {})[tid_hex] = {
+                        "height": height,
+                        "block_hash": bh,
+                        "position": i,
+                    }
             utxo.add_tx(tx, height)
-            index[tx.txid().hex()] = {
+            index[tid_hex] = {
                 "height": height,
-                "block_hash": hexstr(block.hash()),
+                "block_hash": bh,
                 "position": i,
             }
 
@@ -308,9 +346,12 @@ class Blockchain:
                 return False, "duplicate txid in block", 0
             seen_txids.add(tid)
         coinbase = block.transactions[0]
+        # Strict BIP-34: the coinbase scriptSig MUST encode this block's
+        # height. Unparseable/garbage heights are rejected — otherwise a
+        # single coinbase txid could be replayed at multiple heights.
         h = coinbase_height(coinbase)
-        if h is not None and h != height:
-            return False, "coinbase height mismatch", 0
+        if h is None or h != height:
+            return False, "coinbase height mismatch (BIP-34)", 0
         if not coinbase.outputs:
             return False, "empty coinbase outputs", 0
         base = self.cfg.block_reward_sats >> (height // self.cfg.halving_interval)
@@ -390,14 +431,37 @@ class Blockchain:
                     return False, reason, None
                 self.utxo = utxo
                 self._store_block(block, height, parent["work"])
-                # Only update tx_index here — UTXO already applied by _apply_block_to_utxo
+                # Update tx_index + address index — UTXO applied by _apply_block_to_utxo
                 block_hash_hex = hexstr(block.hash())
                 for i, tx in enumerate(block.transactions):
-                    self.tx_index[tx.txid().hex()] = {
+                    tid_hex = tx.txid().hex()
+                    self.tx_index[tid_hex] = {
                         "height": height,
                         "block_hash": block_hash_hex,
                         "position": i,
                     }
+                    if tx.is_coinbase():
+                        continue
+                    for txin in tx.inputs:
+                        if txin.prev_txid == b"\x00" * 32:
+                            continue
+                        owner = self.out_addr_map.get(txin.prev_txid.hex(), {}).get(txin.prev_vout)
+                        if owner:
+                            self.addr_index.setdefault(owner, {})[tid_hex] = {
+                                "height": height,
+                                "block_hash": block_hash_hex,
+                                "position": i,
+                            }
+                    self.out_addr_map[tid_hex] = {
+                        vout: txout.script_pubkey.decode(errors="replace")
+                        for vout, txout in enumerate(tx.outputs)
+                    }
+                    for vout, a in self.out_addr_map[tid_hex].items():
+                        self.addr_index.setdefault(a, {})[tid_hex] = {
+                            "height": height,
+                            "block_hash": block_hash_hex,
+                            "position": i,
+                        }
                 self.storage.set_meta("height", str(height))
                 self.storage.set_meta("tip_hash", h)
                 self.storage.set_meta(
@@ -450,16 +514,53 @@ class Blockchain:
             history_rows.append(parent_row)
             h_at += 1
         if candidate_work <= self.storage.tip_work():
+            # Weak fork: store as side branch, but bound junk storage —
+            # FIFO-evict the oldest side blocks when the cap is reached
+            # (disk-fill DoS defense; honest deep reorgs refetch on demand).
+            cap = max(0, int(getattr(self.cfg, "max_side_branch_blocks", 512)))
+            over = self.storage.side_count() + len(blocks_asc) - cap
+            if over > 0:
+                evict = self.storage.oldest_side_hashes(over)
+                self.storage.delete_by_hashes(evict)
             pk = fork_row["work"]
+            rows = []
             for i, b in enumerate(blocks_asc):
-                self._store_block(b, fork_row["height"] + 1 + i, pk, main=False)
+                rows.append({
+                    "height": fork_row["height"] + 1 + i,
+                    "hash": hexstr(b.hash()),
+                    "prev_hash": hexstr(b.header.prev_hash),
+                    "merkle_root": hexstr(b.header.merkle_root),
+                    "timestamp": b.header.timestamp,
+                    "bits": b.header.bits,
+                    "nonce": b.header.nonce,
+                    "version": b.header.version,
+                    "work": pk + block_work(b.header.bits),
+                    "main": False,
+                    "raw": b.serialize(),
+                })
                 pk += block_work(b.header.bits)
+            for r in rows:
+                self.storage.put_block(r, main=False)
             return False, "weak fork stored as side branch", fork_row["height"] + len(blocks_asc)
-        self.storage.delete_from_height(fork_row["height"] + 1)
+        # Stronger fork: swap the main chain atomically (crash-safe).
+        new_rows = []
         pk = fork_row["work"]
         for i, b in enumerate(blocks_asc):
-            self._store_block(b, fork_row["height"] + 1 + i, pk, main=True)
+            new_rows.append({
+                "height": fork_row["height"] + 1 + i,
+                "hash": hexstr(b.hash()),
+                "prev_hash": hexstr(b.header.prev_hash),
+                "merkle_root": hexstr(b.header.merkle_root),
+                "timestamp": b.header.timestamp,
+                "bits": b.header.bits,
+                "nonce": b.header.nonce,
+                "version": b.header.version,
+                "work": pk + block_work(b.header.bits),
+                "main": True,
+                "raw": b.serialize(),
+            })
             pk += block_work(b.header.bits)
+        self.storage.reorg_apply(fork_row["height"] + 1, new_rows)
         tip_row = self.storage.block_by_height(fork_row["height"] + len(blocks_asc))
         self.storage.set_meta("height", str(tip_row["height"]))
         self.storage.set_meta("tip_hash", tip_row["hash"])
@@ -467,6 +568,16 @@ class Blockchain:
         self.invalid_blocks.clear()
         self._rebuild_state()
         return True, "reorg", tip_row["height"]
+
+    def address_history(self, address: str, limit: int = 10_000) -> list:
+        """Confirmed tx history for an address from the in-memory index."""
+        with self._lock:
+            entries = dict(self.addr_index.get(address, {}))
+        out = []
+        for tid_hex, meta in entries.items():
+            out.append({"txid": tid_hex, **meta})
+        out.sort(key=lambda e: e["height"], reverse=True)
+        return out[:limit]
 
     def next_bits(self) -> int:
         cfg = self.cfg
@@ -552,7 +663,8 @@ class Blockchain:
         return self._parse_row(row) if row else None
 
     def get_tx(self, txid_hex: str):
-        entry = self.tx_index.get(txid_hex)
+        with self._lock:
+            entry = self.tx_index.get(txid_hex)
         if entry is None:
             return None
         block = self.block_by_hash(entry["block_hash"])

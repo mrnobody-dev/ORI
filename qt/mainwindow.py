@@ -23,10 +23,12 @@ from qt.dialogs import (
     backup_wallet,
 )
 from qt.wallet_dialogs import (
+    ChangePassphraseDialog,
     EncryptWalletDialog,
     LoadWalletDialog,
-    NewWalletCreatedDialog,
-    UnlockWalletDialog,
+    SignMessageDialog,
+    UnlockTimeoutDialog,
+    VerifyMessageDialog,
 )
 from qt.icons import (
     app_icon,
@@ -92,36 +94,90 @@ class MainWindow(QMainWindow):
         controller.log_line.connect(self.console_dlg.append_log)
         controller.error.connect(self._on_error)
 
+    def _open_address_book(self):
+        self.addr_dlg.apply_snapshot({
+            "accounts": [
+                {"label": self.controller.label_of(info["address"]),
+                 "address": info["address"], "name": name}
+                for name, info in self.controller.accounts()
+            ]
+        })
+        try:
+            self.addr_dlg.contactPicked.disconnect(self._use_contact)
+        except (RuntimeError, TypeError):
+            pass
+        self.addr_dlg.contactPicked.connect(self._use_contact)
+        self.addr_dlg.exec()
+
+    def _use_contact(self, address: str):
+        self.send.pay_to.setText(address)
+        self.stack.setCurrentWidget(self.send)
+
     def _build_menu(self):
         file_menu = self.menuBar().addMenu("&File")
-        
+
         act_load = QAction("&Load Wallet…", self)
         act_load.triggered.connect(self._act_load_wallet)
         file_menu.addAction(act_load)
-        
+
         act_encrypt = QAction("E&ncrypt Wallet…", self)
         act_encrypt.triggered.connect(self._act_encrypt_wallet)
         file_menu.addAction(act_encrypt)
-        
+
         file_menu.addSeparator()
 
         act_backup = QAction("&Backup Wallet…", self)
         act_backup.triggered.connect(lambda: backup_wallet(self, self.controller))
         act_recv = QAction("&Receiving addresses…", self)
-        act_recv.triggered.connect(self.addr_dlg.exec)
+        act_recv.triggered.connect(self._open_address_book)
+        act_export = QAction("&Export transaction history (CSV)…", self)
+        act_export.triggered.connect(self._act_export_csv)
         act_quit = QAction("E&xit", self)
         act_quit.setShortcut(QKeySequence.StandardKey.Quit)
         act_quit.triggered.connect(self.close)
-        
+
         file_menu.addAction(act_backup)
+        file_menu.addAction(act_export)
         file_menu.addAction(act_recv)
         file_menu.addSeparator()
         file_menu.addAction(act_quit)
+
+        wallet_menu = self.menuBar().addMenu("&Wallet")
+        self.act_lock = QAction("&Lock Wallet", self)
+        self.act_lock.triggered.connect(self._act_lock_wallet)
+        wallet_menu.addAction(self.act_lock)
+        self.act_unlock = QAction("&Unlock Wallet…", self)
+        self.act_unlock.triggered.connect(self._act_unlock_wallet)
+        wallet_menu.addAction(self.act_unlock)
+
+        wallet_menu.addSeparator()
+        act_chpass = QAction("&Change Passphrase…", self)
+        act_chpass.triggered.connect(self._act_change_passphrase)
+        wallet_menu.addAction(act_chpass)
+
+        wallet_menu.addSeparator()
+        act_sign = QAction("&Sign message…", self)
+        act_sign.triggered.connect(lambda: SignMessageDialog(self.controller, self).exec())
+        wallet_menu.addAction(act_sign)
+        act_verify = QAction("&Verify message…", self)
+        act_verify.triggered.connect(
+            lambda: VerifyMessageDialog(self).exec()
+        )
+        wallet_menu.addAction(act_verify)
+
+        wallet_menu.addSeparator()
+        act_dump = QAction("&Dump private key…", self)
+        act_dump.triggered.connect(self._act_dump_key)
+        wallet_menu.addAction(act_dump)
 
         settings = self.menuBar().addMenu("&Settings")
         act_opt = QAction("&Options…", self)
         act_opt.triggered.connect(lambda: OptionsDialog(self.controller, self).exec())
         settings.addAction(act_opt)
+        settings.addSeparator()
+        act_rescan = QAction("Rescan &blockchain from height…", self)
+        act_rescan.triggered.connect(self._act_rescan)
+        settings.addAction(act_rescan)
         settings.addSeparator()
         self._act_dark = QAction("🌙  Dark Mode", self)
         self._act_dark.setCheckable(True)
@@ -147,6 +203,117 @@ class MainWindow(QMainWindow):
         act_about.triggered.connect(lambda: AboutDialog(self).exec())
         help_menu.addAction(act_about_qt)
         help_menu.addAction(act_about)
+
+        # Reflect lock state on menu labels.
+        self.controller.snapshot_ready.connect(lambda _s: self._refresh_wallet_menu())
+        self.controller.started.connect(lambda _f: self._refresh_wallet_menu())
+
+    def _refresh_wallet_menu(self):
+        locked = self.controller.is_locked() if self.controller else False
+        encrypted = self.controller.is_encrypted() if self.controller else False
+        self.act_lock.setEnabled(encrypted and not locked)
+        self.act_unlock.setEnabled(encrypted and locked)
+
+    def _act_lock_wallet(self):
+        self.controller.lock_wallet()
+        QMessageBox.information(self, "Wallet", "Wallet locked.")
+
+    def _act_unlock_wallet(self):
+        dlg = UnlockTimeoutDialog(self)
+        if dlg.exec():
+            pw = dlg.passphrase()
+            minutes = dlg.timeout_minutes()
+            try:
+                ok = self.controller.unlock_wallet(pw, timeout_minutes=minutes)
+            except Exception as exc:
+                ok = False
+                QMessageBox.critical(self, "Unlock", str(exc))
+            if ok:
+                hint = f" (auto-lock in {minutes} min)" if minutes else ""
+                QMessageBox.information(self, "Wallet", f"Wallet unlocked{hint}.")
+            else:
+                QMessageBox.warning(self, "Unlock", "Wrong passphrase.")
+
+    def _act_change_passphrase(self):
+        if not self.controller.is_encrypted():
+            QMessageBox.information(self, "Change Passphrase",
+                                    "The wallet is not encrypted. Encrypt it first.")
+            return
+        dlg = ChangePassphraseDialog(self)
+        if not dlg.exec():
+            return
+        try:
+            self.controller.change_passphrase(dlg.current_passphrase(), dlg.new_passphrase())
+            QMessageBox.information(self, "Change Passphrase", "Passphrase changed successfully.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Change Passphrase", f"Failed:\n{exc}")
+
+    def _act_dump_key(self):
+        addr, ok = self._pick_own_address("Dump private key")
+        if not ok:
+            return
+        try:
+            name, priv = self.controller.dump_private_key(addr)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Private key")
+            box.setText(
+                f"Private key for {addr} ({name}):\n\n{priv}\n\n"
+                "NEVER share this key. Anyone with it controls the funds.\n"
+                "It has been copied to the clipboard."
+            )
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.clipboard().setText(priv)
+            box.exec()
+        except Exception as exc:
+            QMessageBox.critical(self, "Dump private key", str(exc))
+
+    def _pick_own_address(self, title: str):
+        """Simple selector for one of our own addresses."""
+        accounts = [
+            (info.get("address"), name)
+            for name, info in (self.controller.accounts() or [])
+            if isinstance(info, dict) and info.get("address")
+        ]
+        if not accounts:
+            QMessageBox.warning(self, title, "No addresses available.")
+            return "", False
+        names = [f"{a}  ({n})" for a, n in accounts]
+        from PySide6.QtWidgets import QInputDialog
+
+        choice, ok = QInputDialog.getItem(self, title, "Address:", names, 0, False)
+        idx = names.index(choice) if choice in names else 0
+        return accounts[idx][0], ok
+
+    def _act_export_csv(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _f = QFileDialog.getSaveFileName(
+            self, "Export transaction history", "ori-history.csv",
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            n = self.controller.export_history_csv(path)
+            QMessageBox.information(self, "Export", f"Exported {n} transactions to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export", f"Failed:\n{exc}")
+
+    def _act_rescan(self):
+        from PySide6.QtWidgets import QInputDialog
+
+        h, ok = QInputDialog.getInt(
+            self, "Rescan blockchain",
+            "Rescan history starting at height:", 0, 0, 2_000_000_000,
+        )
+        if not ok:
+            return
+        self.controller.rescan_from(h)
+        QMessageBox.information(
+            self, "Rescan", f"Wallet will rescan from height {h}."
+        )
 
     def _build_toolbar(self):
         bar = QToolBar("Tabs")
@@ -210,8 +377,8 @@ class MainWindow(QMainWindow):
 
     def _toggle_dark_mode(self, checked: bool):
         self._dark_mode = checked
-        app = self.__class__._app_ref if hasattr(self.__class__, "_app_ref") else None
         from PySide6.QtWidgets import QApplication
+
         apply_theme(QApplication.instance(), checked)
 
     def _build_status(self):

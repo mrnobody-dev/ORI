@@ -7,7 +7,7 @@ try:
 except Exception:
     qrcode = None
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -99,8 +99,19 @@ class TxDetailDialog(QDialog):
         if is_mempool and controller.node:
             height = controller.node.storage.height()
             block_time = controller.node.cfg.block_time_seconds
-            # Default tier 5 estimate
+            # Estimate from the tx's actual fee rate (nearest fee tier).
+            fee_sats = float(d.get("fee_sats") or 0)
+            size = int(d.get("size") or 1)
+            cfg = getattr(controller, "cfg", None) or controller.node.cfg
+            tiers = sorted(cfg.fee_tiers_per_vb.items(),
+                           key=lambda kv: kv[1], reverse=True)  # fastest first
             eta_blocks = 5
+            if size > 0 and fee_sats > 0:
+                rate = fee_sats / size
+                for tier_num, tier_rate in tiers:
+                    if rate >= tier_rate:
+                        eta_blocks = tier_num
+                        break
             eta_sec = eta_blocks * block_time
             eta_str = _format_eta(eta_sec)
             eta_lbl = QLabel(
@@ -188,7 +199,7 @@ class TxDetailDialog(QDialog):
         layout.addWidget(btns)
 
     def _bump_fee(self):
-        dlg = BumpFeeDialog(self.txid, parent=self)
+        dlg = BumpFeeDialog(self.txid, parent=self, cfg=self.controller.cfg)
         if not dlg.exec():
             return
         try:
@@ -474,174 +485,25 @@ class ConsoleDialog(QDialog):
         cmd = self.cmd.text().strip()
         if not cmd:
             return
-        
+
         self._history.append(cmd)
         self._history_idx = len(self._history)
         self.cmd.clear()
 
         self._append_html(f'<br><span style="color:#3498DB"><b>> {cmd}</b></span>')
 
-        parts = cmd.split()
-        op = parts[0].lower()
-        args = parts[1:]
-
-        node = self.controller.node
-        if not node:
+        if not self.controller.node:
             self._append_html('<span style="color:#E74C3C">Error: Node not running</span>')
             return
 
         try:
-            import json
-            if op == "help":
-                self._append_html(
-                    "<b>Commands:</b><br>"
-                    "  <code>getinfo</code> - Node status<br>"
-                    "  <code>getblockcount</code> - Current tip height<br>"
-                    "  <code>getblock &lt;hash&gt;</code> - Block by hash<br>"
-                    "  <code>getblockhash &lt;height&gt;</code> - Hash of block at height<br>"
-                    "  <code>getrawmempool</code> - All mempool txids<br>"
-                    "  <code>getpeerinfo</code> - Connected peers<br>"
-                    "  <code>getblocktime</code> - Expected seconds per block<br>"
-                    "  <code>getsupply</code> - Current circulating supply<br>"
-                    "  <code>getutxo &lt;txid&gt; &lt;vout&gt;</code> - Inspect UTXO<br>"
-                    "  <code>getdifficulty</code> - Current PoW difficulty bits<br>"
-                    "  <code>sendrawtransaction &lt;hex&gt;</code> - Submit tx<br>"
-                    "  <code>decoderawtransaction &lt;hex&gt;</code> - Decode tx hex<br>"
-                    "  <code>listunspent</code> - Wallet UTXOs<br>"
-                    "  <code>bumpfee &lt;txid&gt; &lt;tier&gt;</code> - Bump fee of unconfirmed tx<br>"
-                    "  <code>stop</code> - Shutdown node"
-                )
-            elif op == "getinfo":
-                res = {
-                    "version": "ORI Core v0.2.0",
-                    "blocks": node.chain.storage.height(),
-                    "difficulty": node.chain.storage.get_meta("tip_work"),
-                    "connections": len(node.network.peers),
-                    "mempool_size": node.mempool.size(),
-                    "testnet": node.cfg.network_magic != b"\xf9\xbe\xb4\xd9",
-                }
-                self._append_html(f"<pre>{json.dumps(res, indent=2)}</pre>")
-            elif op == "getblockcount":
-                self._append_html(str(node.chain.storage.height()))
-            elif op == "getblock":
-                if not args:
-                    self._append_html('<span style="color:#E74C3C">Usage: getblock &lt;height|hash&gt;</span>')
-                else:
-                    arg = args[0]
-                    if arg.isdigit():
-                        height = int(arg)
-                        blk = node.chain.block_at(height)
-                    else:
-                        blk = node.chain.block_by_hash(arg)
-                        height = node.chain.storage.chain_height_of(arg)
-                    if blk:
-                        self._append_html(f"<pre>{json.dumps(blk.to_dict(height), indent=2)}</pre>")
-                    else:
-                        self._append_html('<span style="color:#E74C3C">Block not found</span>')
-            elif op == "getblockhash":
-                if not args:
-                    self._append_html('<span style="color:#E74C3C">Usage: getblockhash &lt;height&gt;</span>')
-                else:
-                    row = node.chain.storage.block_by_height(int(args[0]))
-                    if row:
-                        self._append_html(row["hash"])
-                    else:
-                        self._append_html('<span style="color:#E74C3C">Height out of bounds</span>')
-            elif op == "getrawmempool":
-                self._append_html(f"<pre>{json.dumps([txid.hex() for txid in node.mempool.txids()], indent=2)}</pre>")
-            elif op == "getpeerinfo":
-                peers = [{"ip": p.addr[0], "port": p.addr[1], "user_agent": p.ua} for p in node.network.peers.values()]
-                self._append_html(f"<pre>{json.dumps(peers, indent=2)}</pre>")
-            elif op == "getblocktime":
-                self._append_html(str(node.cfg.block_time_seconds))
-            elif op == "getsupply":
-                self._append_html(str(node.chain.utxo.total_supply()))
-            elif op == "getutxo":
-                if len(args) != 2:
-                    self._append_html('<span style="color:#E74C3C">Usage: getutxo &lt;txid&gt; &lt;vout&gt;</span>')
-                else:
-                    txid, vout = args[0], int(args[1])
-                    val = node.chain.utxo.get(bytes.fromhex(txid), vout)
-                    if val is None:
-                        self._append_html('<span style="color:#E74C3C">UTXO not found (or already spent)</span>')
-                    else:
-                        height, amt, addr, cb = val
-                        res = {"height": height, "value_sats": amt, "address": addr, "coinbase": cb}
-                        self._append_html(f"<pre>{json.dumps(res, indent=2)}</pre>")
-            elif op == "getdifficulty":
-                tip = node.chain.tip()
-                self._append_html(json.dumps({
-                    "bits": hex(tip["bits"]),
-                    "difficulty": tip.get("difficulty"),
-                    "next_bits": hex(node.chain.next_bits()),
-                }, indent=2))
-            elif op == "sendrawtransaction":
-                if not args:
-                    self._append_html('<span style="color:#E74C3C">Usage: sendrawtransaction &lt;hex&gt;</span>')
-                else:
-                    ok, msg, txid = node.submit_raw_tx(args[0])
-                    if ok:
-                        self._append_html(f"OK. TxID: {txid}")
-                    else:
-                        self._append_html(f'<span style="color:#E74C3C">Error: {msg}</span>')
-            elif op == "decoderawtransaction":
-                if not args:
-                    self._append_html('<span style="color:#E74C3C">Usage: decoderawtransaction &lt;hex&gt;</span>')
-                else:
-                    from tx import Transaction
-                    try:
-                        tx = Transaction.from_hex(args[0])
-                        decoded = {
-                            "txid": tx.txid().hex(),
-                            "version": tx.version,
-                            "locktime": tx.locktime,
-                            "coinbase": tx.is_coinbase(),
-                            "size": len(tx.serialize()),
-                            "inputs": [
-                                {
-                                    "prev_txid": txin.prev_txid.hex(),
-                                    "prev_vout": txin.prev_vout,
-                                    "sequence": txin.sequence,
-                                    "sigscript": txin.script_sig.hex(),
-                                }
-                                for txin in tx.inputs
-                            ],
-                            "outputs": [
-                                {
-                                    "vout": idx,
-                                    "value": out.value,
-                                    "script_pubkey": out.script_pubkey.decode(errors="replace"),
-                                }
-                                for idx, out in enumerate(tx.outputs)
-                            ],
-                        }
-                        self._append_html(f"<pre>{json.dumps(decoded, indent=2)}</pre>")
-                    except Exception as e:
-                        self._append_html(f'<span style="color:#E74C3C">Decode failed: {e}</span>')
-            elif op == "listunspent":
-                _, acc = self.controller.default_account()
-                if acc:
-                    utxos = node.chain.utxos_of(acc.get("address"))
-                    self._append_html(f"<pre>{json.dumps(utxos, indent=2)}</pre>")
-                else:
-                    self._append_html('<span style="color:#E74C3C">No default wallet account</span>')
-            elif op == "bumpfee":
-                if len(args) != 2:
-                    self._append_html('<span style="color:#E74C3C">Usage: bumpfee &lt;txid&gt; &lt;tier&gt;</span>')
-                else:
-                    txid, tier = args[0], int(args[1])
-                    try:
-                        res = self.controller.bump_fee(txid, tier)
-                        self._append_html(f"<pre>{json.dumps(res, indent=2)}</pre>")
-                    except Exception as e:
-                        self._append_html(f'<span style="color:#E74C3C">Error: {e}</span>')
-            elif op == "stop":
-                self._append_html("Stopping node...")
-                self.controller.shutdown()
-                from PySide6.QtWidgets import QApplication
-                QApplication.quit()
-            else:
-                self._append_html(f'<span style="color:#E74C3C">Unknown command: {op}</span>')
+            # Single source of truth: the controller's unified dispatcher.
+            result = self.controller.debug_command(cmd)
+            if result:
+                if "<" in result and ">" in result:
+                    from html import escape
+                    result = escape(result)
+                self._append_html(f"<pre>{result}</pre>")
         except Exception as exc:
             self._append_html(f'<span style="color:#E74C3C">Exception: {str(exc)}</span>')
 
@@ -678,6 +540,14 @@ class PeersDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
+
+        peer_btns = QHBoxLayout()
+        self.btn_disc = QPushButton("Disconnect selected")
+        self.btn_disc.setObjectName("dangerButton")
+        self.btn_disc.clicked.connect(self._disconnect_selected)
+        peer_btns.addWidget(self.btn_disc)
+        peer_btns.addStretch(1)
+        layout.addLayout(peer_btns)
 
         known_box = QGroupBox("Known peers")
         kv = QVBoxLayout(known_box)
@@ -726,6 +596,18 @@ class PeersDialog(QDialog):
         else:
             self.failures.setText("")
 
+    def _disconnect_selected(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Peers", "Select a connected peer first.")
+            return
+        host = self.table.item(row, 2).text()
+        port = self.table.item(row, 3).text()
+        if self.controller.disconnect_peer(host, int(port or 0)):
+            QMessageBox.information(self, "Peers", f"Disconnected {host}:{port}")
+        else:
+            QMessageBox.warning(self, "Peers", f"Peer {host}:{port} is no longer connected.")
+
     def _add(self):
         host = self.host.text().strip()
         if not host:
@@ -741,12 +623,26 @@ class PeersDialog(QDialog):
 
 
 class AddressBookDialog(QDialog):
+    """Two tabs: My Addresses (receiving) + Contacts (saved pay-to addresses).
+
+    Double-clicking a contact row emits contactPicked(address).
+    """
+
+    contactPicked = Signal(str)
+
     def __init__(self, controller, parent=None):
         super().__init__(parent)
         self.controller = controller
-        self.setWindowTitle("Receiving Addresses")
-        self.resize(700, 380)
+        self.setWindowTitle("Address Book")
+        self.resize(700, 420)
         layout = QVBoxLayout(self)
+
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        # ── Tab 1: My Addresses ────────────────────────────────────
+        self.my_widget = QWidget()
+        my_layout = QVBoxLayout(self.my_widget)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Label", "Address", "Account"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -754,26 +650,130 @@ class AddressBookDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
-        layout.addWidget(self.table)
+        my_layout.addWidget(self.table)
         row = QHBoxLayout()
         copy = QPushButton("Copy address")
         copy.clicked.connect(self._copy)
-        close = QPushButton("Close")
-        close.clicked.connect(self.accept)
+        my_layout.addLayout(row)
         row.addWidget(copy)
         row.addStretch(1)
-        row.addWidget(close)
-        layout.addLayout(row)
+        self.tabs.addTab(self.my_widget, "My Addresses")
+
+        # ── Tab 2: Contacts ────────────────────────────────────────
+        self.contacts_widget = QWidget()
+        c_layout = QVBoxLayout(self.contacts_widget)
+        self.c_table = QTableWidget(0, 2)
+        self.c_table.setHorizontalHeaderLabels(["Label", "Address"])
+        self.c_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.c_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.c_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.c_table.verticalHeader().setVisible(False)
+        self.c_table.setAlternatingRowColors(True)
+        self.c_table.doubleClicked.connect(self._pick_contact)
+        c_layout.addWidget(self.c_table)
+
+        c_row = QHBoxLayout()
+        btn_add = QPushButton("Add…")
+        btn_add.clicked.connect(self._add_contact)
+        btn_edit = QPushButton("Edit label…")
+        btn_edit.clicked.connect(self._edit_contact)
+        btn_del = QPushButton("Delete")
+        btn_del.clicked.connect(self._delete_contact)
+        btn_copy = QPushButton("Copy address")
+        btn_copy.clicked.connect(self._copy_contact)
+        btn_pick = QPushButton("Use in Send")
+        btn_pick.setObjectName("primaryButton")
+        btn_pick.clicked.connect(self._pick_contact)
+        for b in (btn_add, btn_edit, btn_del, btn_copy):
+            c_row.addWidget(b)
+        c_row.addStretch(1)
+        c_row.addWidget(btn_pick)
+        c_layout.addLayout(c_row)
+        self.tabs.addTab(self.contacts_widget, "Contacts")
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        close_row.addWidget(close)
+        layout.addLayout(close_row)
 
     def apply_snapshot(self, snap: dict):
-        acc = snap.get("accounts") or []
-        self.table.setRowCount(len(acc))
-        for i, a in enumerate(acc):
+        accs = snap.get("accounts") or []
+        self.table.setRowCount(len(accs))
+        for i, a in enumerate(accs):
             self.table.setItem(i, 0, QTableWidgetItem(a.get("label") or ""))
             addr_item = QTableWidgetItem(a.get("address") or "")
             addr_item.setFont(QFont("Consolas", 9))
             self.table.setItem(i, 1, addr_item)
             self.table.setItem(i, 2, QTableWidgetItem(a.get("name") or ""))
+        self._reload_contacts()
+
+    def _reload_contacts(self):
+        book = self.controller.book_list() if self.controller else []
+        self.c_table.setRowCount(len(book))
+        for i, e in enumerate(book):
+            lbl = QTableWidgetItem(e.get("label") or "")
+            addr = QTableWidgetItem(e.get("address") or "")
+            addr.setFont(QFont("Consolas", 9))
+            self.c_table.setItem(i, 0, lbl)
+            self.c_table.setItem(i, 1, addr)
+
+    def _selected_contact_address(self) -> str:
+        items = self.c_table.selectedItems()
+        if not items:
+            return ""
+        return self.c_table.item(items[0].row(), 1).text()
+
+    def _add_contact(self):
+        from qt.wallet_dialogs import AddressBookEntryDialog
+        dlg = AddressBookEntryDialog(self)
+        if dlg.exec():
+            try:
+                self.controller.book_add(dlg.label_text(), dlg.address_text())
+            except Exception as exc:
+                QMessageBox.warning(self, "Address Book", str(exc))
+                return
+            self._reload_contacts()
+
+    def _edit_contact(self):
+        addr = self._selected_contact_address()
+        if not addr:
+            return
+        from qt.wallet_dialogs import AddressBookEntryDialog
+        current_label = ""
+        for e in self.controller.book_list():
+            if e.get("address") == addr:
+                current_label = e.get("label") or ""
+                break
+        dlg = AddressBookEntryDialog(self, address=addr, label=current_label)
+        if dlg.exec():
+            self.controller.book_set_label(addr, dlg.label_text())
+            self._reload_contacts()
+
+    def _delete_contact(self):
+        addr = self._selected_contact_address()
+        if not addr:
+            return
+        if QMessageBox.question(
+            self, "Delete Contact",
+            f"Remove {addr} from the address book?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) == QMessageBox.StandardButton.Yes:
+            self.controller.book_remove(addr)
+            self._reload_contacts()
+
+    def _copy_contact(self):
+        addr = self._selected_contact_address()
+        if addr:
+            QApplication.clipboard().setText(addr)
+
+    def _pick_contact(self, *_):
+        addr = self._selected_contact_address()
+        if addr:
+            self.contactPicked.emit(addr)
+            self.accept()
 
     def _copy(self):
         items = self.table.selectedItems()
