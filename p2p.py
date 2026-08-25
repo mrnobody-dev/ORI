@@ -805,7 +805,9 @@ class Network:
             if self._register(peer):
                 peer.start()
 
-    def connect(self, host: str, port):
+    def connect(self, host: str, port, force: bool = False):
+        """Outbound connect. `force=True` (manual addnode) clears any
+        exponential-backoff state so a user retry is always attempted NOW."""
         if not self.cfg.enable_p2p:
             return
         port = int(port)
@@ -821,6 +823,10 @@ class Network:
             if self._is_banned(key):
                 logger.debug(LogCategory.P2P, "Outbound peer skipped - banned", peer=_peer_label(key))
                 return
+            if force:
+                # Manual operator action overrides retry backoff.
+                self._connect_backoff.pop(key, None)
+                self._connect_fails.pop(key, None)
             if key in self._outbound or key in self.peers:
                 return
             if len(self.peers) >= self.cfg.max_peers:

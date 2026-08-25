@@ -517,9 +517,10 @@ class PeersDialog(QDialog):
         layout = QVBoxLayout(self)
 
         add = QHBoxLayout()
-        add.addWidget(QLabel("Add node:"))
+        add.addWidget(QLabel("Add node (P2P port — NOT the HTTP/API URL):"))
         self.host = QLineEdit()
         self.host.setPlaceholderText("host, host:port, or p2p URL")
+        self.host.setMinimumWidth(260)
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(8033)
@@ -529,6 +530,12 @@ class PeersDialog(QDialog):
         add.addWidget(self.port)
         add.addWidget(btn)
         layout.addLayout(add)
+        hint = QLabel("Contoh: sakura.proxy.rlwy.net  +  port 24044 (TCP proxy P2P). "
+                      "Jangan pakai domain HTTP/API — handshake P2P akan gagal. "
+                      "Log detail: logs\\orid.log di folder data.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(

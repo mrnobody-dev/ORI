@@ -400,7 +400,8 @@ class Node:
 
     def add_peer(self, host: str, port: int):
         self.network.add_manual_peer(host, port)
-        self.network.connect(host, port)
+        # force=True: manual operator action must bypass connect backoff
+        self.network.connect(host, port, force=True)
 
     def stats(self) -> dict:
         tip = self.chain.tip()
