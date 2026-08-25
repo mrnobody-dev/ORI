@@ -274,6 +274,9 @@ class NodeController(QObject):
                 port=free_port,
                 log_level="warning",
                 access_log=False,
+                # Frozen builds (PyInstaller) miss uvicorn's default logging
+                # config classes -> 'Unable to configure formatter default'.
+                log_config=None,
             )
             self._api_server = uvicorn.Server(config)
             self._api_thread = threading.Thread(target=self._api_server.run, daemon=True)

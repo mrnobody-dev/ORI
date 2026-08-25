@@ -254,6 +254,17 @@ class Peer(threading.Thread):
                 break
             if msg is None:
                 self.disconnect_reason = "socket closed"
+                if not self.handshake_complete:
+                    # Make the #1 misconfiguration visible: remote accepted TCP
+                    # but is not speaking the ORI P2P protocol (wrong proxy
+                    # target / API port instead of P2P port / service down).
+                    logger.warn(
+                        LogCategory.P2P,
+                        "Remote closed connection BEFORE version handshake — "
+                        "target is not a P2P listener (check TCP proxy/port)",
+                        peer=_peer_label(self.addr),
+                        outbound=self.outbound,
+                    )
                 break
             cmd, payload = msg
             
