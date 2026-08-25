@@ -365,11 +365,12 @@ class NodeController(QObject):
         name, info = create_account(self.wallet, self.wallet_path, f"receive_{n}")
         if label:
             self.set_label(info["address"], label)
+        self._save_meta(force=True)  # force-save so label/account survives a crash
         return name, info
 
     def add_receive_request(self, entry: dict):
         self.meta.setdefault("receive_requests", []).insert(0, entry)
-        self._save_meta()
+        self._save_meta(force=True)
 
     # --- address book ------------------------------------------------------
 
@@ -385,23 +386,23 @@ class NodeController(QObject):
             if entry.get("address") == address:
                 if label:
                     entry["label"] = label
-                    self._save_meta()
+                    self._save_meta(force=True)
                 return False
         book.append({"label": label, "address": address})
-        self._save_meta()
+        self._save_meta(force=True)
         return True
 
     def book_remove(self, address: str):
         book = self.meta.setdefault("address_book", [])
         self.meta["address_book"] = [e for e in book if e.get("address") != address]
-        self._save_meta()
+        self._save_meta(force=True)
 
     def book_set_label(self, address: str, label: str):
         for entry in self.meta.setdefault("address_book", []):
             if entry.get("address") == address:
                 entry["label"] = label
                 break
-        self._save_meta()
+        self._save_meta(force=True)
 
     # --- node snapshot -----------------------------------------------------
 

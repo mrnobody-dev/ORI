@@ -105,23 +105,31 @@ class ReceivePage(QWidget):
     def _update_qr(self):
         addr = self.address.text().strip()
         if not addr:
-            self.qr_label.setText("")
+            self.qr_label.clear()
             return
         try:
             import qrcode
             from PySide6.QtGui import QImage, QPixmap
 
             img = qrcode.make(f"ori:{addr}")
-            qimg = QImage(img.tobytes(), img.size[0], img.size[1],
-                          QImage.Format.Format_Grayscale8)
+            # Convert to RGBA so Qt's image format matches (1-bit PIL is packed bytes,
+            # not 1 byte per pixel — using RGBA8888 is safe on all PIL versions).
+            img_rgba = img.convert("RGBA")
+            w, h = img_rgba.size
+            qimg = QImage(
+                img_rgba.tobytes("raw", "RGBA"), w, h,
+                QImage.Format.Format_RGBA8888,
+            )
             pix = QPixmap.fromImage(qimg).scaled(
                 140, 140,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             self.qr_label.setPixmap(pix)
-        except Exception:
-            self.qr_label.setText("QR\nn/a")
+        except ImportError:
+            self.qr_label.setText("QR\nn/a\n(install\nqrcode)")
+        except Exception as exc:
+            self.qr_label.setText(f"QR\nerror")
 
     def _fill_requests(self, rows: list):
         self.table.setRowCount(len(rows))
@@ -197,8 +205,6 @@ class ReceivePage(QWidget):
         self.controller.refresh()
 
     def _open_address_detail(self, row: int, col: int):
-        if col != 2:
-            return
         item = self.table.item(row, 2)
         if item and item.text():
             AddressDetailDialog(self.controller, item.text(), self).exec()

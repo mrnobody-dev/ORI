@@ -432,7 +432,11 @@ class AddressBookEntryDialog(QDialog):
     def _accept(self):
         from bech32 import validate_address
         addr = self.address_text()
-        if not validate_address(addr, self._hrp()):
+        label = self.label_text()
+        if not addr:
+            QMessageBox.warning(self, "Invalid Address", "Please enter an address.")
+            return
+        if not validate_address(addr, _hrp()):
             QMessageBox.warning(
                 self, "Invalid Address",
                 "That is not a valid ORI (ori1…) address.",
@@ -627,7 +631,7 @@ class VerifyMessageDialog(QDialog):
         from qt.controller import NodeController
 
         addr = self.addr.text().strip()
-        if not validate_address(addr, self._hrp()):
+        if not validate_address(addr, _hrp()):
             QMessageBox.warning(self, "Verify Message", "Invalid ORI address.")
             return
         ok = NodeController.verify_message_static(
