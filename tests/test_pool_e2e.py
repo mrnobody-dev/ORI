@@ -105,8 +105,22 @@ def main():
             if nonce > 40_000_000:
                 raise RuntimeError("no solution")
 
+    # helper: mine a header meeting target_int but NOT the network target
+    # (otherwise a plain 'share' would accidentally become a real block)
+    def mine_share_only(job, start_hdr=None):
+        nt = int(job["node_target"], 16)
+        pt = int(job["pool_target"], 16)
+        hdr = bytearray(start_hdr or mine_header(pt))
+        while True:
+            h = hashlib.sha256(hashlib.sha256(bytes(hdr)).digest()).digest()
+            hv = int.from_bytes(h, "big")
+            if pt >= hv > nt:
+                return bytes(hdr)
+            nonce = struct.unpack_from("<I", hdr, 76)[0] + 1
+            struct.pack_into("<I", hdr, 76, nonce)
+
     # 1) submit a SHARE (meets pool target only)
-    share_hdr = mine_header(pool_target).hex()
+    share_hdr = mine_share_only(job).hex()
     r = client.post("/pool/submit", json={
         "worker_addr": worker, "job_id": job_id, "header_hex": share_hdr})
     assert r.status_code == 200, r.text
@@ -136,15 +150,9 @@ def main():
 
     # 3c) duplicate header rejected even under a fresh valid job
     j3 = client.get("/pool/job", params={"worker": worker}).json()
-    tgt3 = int(j3["pool_target"], 16)
-    hdr_dup = bytearray(bytes.fromhex(share_hdr))
-    hdr_dup[68:72] = struct.pack("<I", j3["timestamp"] + 5)  # distinct ts
-    while True:
-        h = hashlib.sha256(hashlib.sha256(bytes(hdr_dup)).digest()).digest()
-        if int.from_bytes(h, "big") <= tgt3:
-            break
-        nonce = struct.unpack_from("<I", hdr_dup, 76)[0] + 1
-        struct.pack_into("<I", hdr_dup, 76, nonce)
+    base = bytearray(mine_header(int(j3["pool_target"], 16)))
+    base[68:72] = struct.pack("<I", j3["timestamp"] + 5)  # distinct ts
+    hdr_dup = mine_share_only(j3, bytes(base))
     r = client.post("/pool/submit", json={
         "worker_addr": worker, "job_id": j3["job_id"], "header_hex": hdr_dup.hex()})
     assert r.status_code == 200, r.text          # first time accepted
