@@ -4,6 +4,21 @@ Welcome to the ORI blockchain! ORI is a Bitcoin-style full node with a UTXO mode
 
 Whether you just want to run the wallet, start a node, or mine some ORI, this guide will get you started quickly!
 
+## ⬇️ Download Pre-compiled Binaries (Windows)
+
+> **No Python required** — just download, extract, and run!
+
+| File | Description |
+|------|-------------|
+| [**ORICore-v0.2.0-windows-x64.zip**](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.0/ORICore-v0.2.0-windows-x64.zip) | Full node + GUI wallet + miner (all-in-one) |
+
+**How to use:**
+1. Download and extract the ZIP
+2. Run `ORICore.exe` → full node + wallet GUI starts automatically
+3. Run `miner-ori.exe --address ori1<YOUR_ADDRESS>` to start mining
+
+👉 **[All releases →](https://github.com/mrnobody-dev/ORI/releases)**
+
 ## 🚀 Quick Start (Easiest Way)
 
 The easiest way to try ORI is by using **ORI Core**, our graphical interface (GUI). It includes a full node and a wallet built right in.
