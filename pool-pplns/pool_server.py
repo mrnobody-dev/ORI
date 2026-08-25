@@ -42,6 +42,7 @@ POOL_PRIV_HEX     = _e("POOL_PRIV_HEX", "")
 POOL_PUB_HEX      = _e("POOL_PUB_HEX",  "")
 POOL_NAME         = _e("POOL_NAME",      "ORI Pool")
 POOL_FEE_PCT      = float(_e("POOL_FEE_PCT",      "1.0"))
+POOL_FEE_ADDRESS  = _e("POOL_FEE_ADDRESS", "")
 POOL_DIFF         = float(_e("POOL_DIFF",          "0.01"))
 PPLNS_N           = int(_e("PPLNS_N",              "1000000"))
 MIN_PAYOUT_SATS   = int(_e("MIN_PAYOUT_SATS",      "100000000"))   # 1 ORI
@@ -118,7 +119,7 @@ def _job_id(height: int, prev_hash: str) -> str:
 def _expected_merkle(height: int, reward_sats: int, txs: list) -> bytes | None:
     """Pre-compute the merkle root the miner MUST produce for a valid share."""
     try:
-        cb = coinbase_tx(height, reward_sats, POOL_ADDRESS)
+        cb = coinbase_tx(height, reward_sats, POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
         txid_list = [cb.txid()]
         for tx_hex in txs:
             txid_list.append(Transaction.from_hex(tx_hex).txid())
@@ -260,7 +261,7 @@ def _validate(job: dict, header_hex: str, worker: str):
 def _submit_block(job: dict, header_hex: str) -> tuple[bool, int, str]:
     """Build full block bytes from job + header and submit to node."""
     hdr = bytes.fromhex(header_hex)
-    cb  = coinbase_tx(job["height"], job["reward_sats"], POOL_ADDRESS)
+    cb  = coinbase_tx(job["height"], job["reward_sats"], POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
     all_txs = [cb]
     for tx_hex in job.get("txs", []):
         try:

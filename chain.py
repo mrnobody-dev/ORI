@@ -403,6 +403,12 @@ class Blockchain:
             if parent is None:
                 return False, "unknown parent", None
             height = parent["height"] + 1
+            
+            if hasattr(self.cfg, "checkpoints") and height in self.cfg.checkpoints:
+                if h != self.cfg.checkpoints[height]:
+                    self._remember_invalid(h)
+                    return False, f"checkpoint mismatch at height {height} (expected {self.cfg.checkpoints[height]}, got {h})", None
+
             if block.header.bits != self.expected_bits(height, parent):
                 main_row = self.storage.block_by_height(parent["height"])
                 parent_on_main = main_row is not None and main_row["hash"] == parent_hash

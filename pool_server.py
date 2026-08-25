@@ -55,6 +55,7 @@ POOL_NODE_URL = os.environ.get("POOL_NODE_URL", "http://127.0.0.1:8000").rstrip(
 POOL_NODE_TOKEN = os.environ.get("BTPY_API_TOKEN", "")
 POOL_ADDRESS = os.environ.get("POOL_ADDRESS", "")       # payout address (required)
 POOL_FEE_PCT = float(os.environ.get("POOL_FEE_PCT", "1.0"))
+POOL_FEE_ADDRESS = os.environ.get("POOL_FEE_ADDRESS", "")
 PPLNS_POINTS = int(os.environ.get("PPLNS_POINTS", "10000"))   # window size (shares)
 POOL_DIFF_SHIFT = int(os.environ.get("POOL_DIFF_SHIFT", "12"))  # start: node_target * 2^shift
 MIN_SHIFT = int(os.environ.get("POOL_MIN_SHIFT", "4"))          # hardest (node_target * 2^4)
@@ -343,7 +344,7 @@ def _parse_header(header_hex: str):
 
 def _expected_merkle(job: dict) -> bytes:
     """Recompute the merkle root a miner must produce for `job`."""
-    cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
+    cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
     txids = [cb.txid()]
     for hx in job.get("txs", []):
         from tx import Transaction
@@ -520,7 +521,7 @@ def pool_submit(body: SubmitReq):
         from block import Block, BlockHeader
         from tx import Transaction
 
-        cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
+        cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
         txs = [cb] + [Transaction.from_hex(hx) for hx in job.get("txs", [])]
         hdr = BlockHeader(version=version, prev_hash=prev_hash, merkle_root=merkle,
                           timestamp=ts, bits=bits, nonce=nonce)

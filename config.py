@@ -57,7 +57,7 @@ class Config:
     low_s_activation_height: int = 53
     network_magic: bytes = b"\x4f\x52\x49\x31"
     max_money_sats: int = 19_460_000_000_000_000
-    seed_dns_host: str = "127.0.0.1"
+    seed_dns_host: str = "0.0.0.0"
     seed_dns_port: int = 5353
     seed_dns_name: str = "seed.ori"
     seed_dns_p2p_port: int = 8033
@@ -76,6 +76,7 @@ class Config:
     assume_valid_block: str = ""
     assume_valid_height: int = 0
     assume_valid_min_depth: int = 1440
+    checkpoints: dict = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -158,7 +159,13 @@ class Config:
             require_api_token_when_public=str(
                 _env_or_file("BTPY_REQUIRE_API_TOKEN_WHEN_PUBLIC", "require_api_token_when_public", "1")
             ) == "1",
-            assume_valid_block=str(_env_or_file("BTPY_ASSUME_VALID_BLOCK", "assume_valid_block", "")),
-            assume_valid_height=int(_env_or_file("BTPY_ASSUME_VALID_HEIGHT", "assume_valid_height", "0")),
+            assume_valid_block=str(_env_or_file("BTPY_ASSUME_VALID_BLOCK", "assume_valid_block", "25274f54c9c5875860af52f318461f7a8cebb9a1b6883aa5d0ae344ac1280000")),
+            assume_valid_height=int(_env_or_file("BTPY_ASSUME_VALID_HEIGHT", "assume_valid_height", "100")),
             assume_valid_min_depth=int(_env_or_file("BTPY_ASSUME_VALID_MIN_DEPTH", "assume_valid_min_depth", "1440")),
+            checkpoints=file_cfg.get("checkpoints", {
+                100: "25274f54c9c5875860af52f318461f7a8cebb9a1b6883aa5d0ae344ac1280000",
+                1000: "b26dfbdefdc0cdf399b0e458f3a1a24df847b77b063456957ffe83b007000000",
+                2500: "28260961fd0ca7ef9789b2e756bee86637ac41de6e8f9928af645d0201000000",
+                5000: "2f71f6d759a5a16a9de00018ebf7fb58629bb2abd5e27ad4663c506d01000000",
+            }),
         )

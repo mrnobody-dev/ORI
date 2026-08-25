@@ -133,14 +133,22 @@ class Transaction:
         return tx
 
 
-def coinbase_tx(height: int, reward_sats: int, address: str, note: str = "") -> Transaction:
+def coinbase_tx(height: int, reward_sats: int, address: str, note: str = "", fee_address: str = "", fee_pct: float = 0.0) -> Transaction:
     hbytes = height.to_bytes((height.bit_length() + 7) // 8 or 1, "little")
     script = bytes([len(hbytes)]) + hbytes
     if note:
         script += note.encode()
     txin = TxIn(NULL_HASH, 0xFFFFFFFF, script)
-    txout = TxOut(reward_sats, address.encode())
-    return Transaction(1, [txin], [txout], 0)
+    
+    if fee_address and fee_pct > 0.0:
+        fee_sats = int(reward_sats * fee_pct / 100.0)
+        miner_sats = reward_sats - fee_sats
+        txout1 = TxOut(miner_sats, address.encode())
+        txout2 = TxOut(fee_sats, fee_address.encode())
+        return Transaction(1, [txin], [txout1, txout2], 0)
+    else:
+        txout = TxOut(reward_sats, address.encode())
+        return Transaction(1, [txin], [txout], 0)
 
 
 def coinbase_height(tx: Transaction):
