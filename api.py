@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from tx import NULL_HASH
 from utils import hexstr, now
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 
 class TxRequest(BaseModel):

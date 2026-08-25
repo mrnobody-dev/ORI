@@ -39,6 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hashlib
 import struct
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -306,14 +308,20 @@ class Ledger:
             total_pts = len(self.window)
             payout: dict[str, int] = {}
             if total_pts:
-                net = reward_sats * (100.0 - POOL_FEE_PCT) / 100.0
+                net = int(reward_sats * (100.0 - POOL_FEE_PCT) / 100.0)
                 counts: dict[str, int] = {}
                 for w in self.window:
                     counts[w] = counts.get(w, 0) + 1
+                distributed = 0
                 for w, pts in counts.items():
                     amt = int(net * pts / total_pts)
                     self.balances[w] = self.balances.get(w, 0) + amt
                     payout[w] = amt
+                    distributed += amt
+                # Dust from integer truncation goes to pool address balance
+                dust = net - distributed
+                if dust > 0 and POOL_ADDRESS:
+                    self.balances[POOL_ADDRESS] = self.balances.get(POOL_ADDRESS, 0) + dust
             self.total_blocks += 1
             self.blocks_history.append({
                 "height": height,
@@ -355,14 +363,15 @@ def _expected_merkle(job: dict) -> bytes:
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
 
-app = FastAPI(title="ORI PPLNS Pool", version="0.1.0")
-
-
-@app.on_event("startup")
-def _startup():
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
     if not POOL_ADDRESS:
         raise RuntimeError("POOL_ADDRESS env is required (pool payout address)")
     TPL.start()
+    yield
+
+
+app = FastAPI(title="ORI PPLNS Pool", version="0.1.0", lifespan=_lifespan)
 
 
 class SubmitReq(BaseModel):

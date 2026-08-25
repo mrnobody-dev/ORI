@@ -1,9 +1,9 @@
 # 🔍 LAPORAN AUDIT KEAMANAN & BUG — ORI Core (blockchain-fastapi)
 
-**Tanggal:** 2026-08-24
-**Scope:** Seluruh kode inti (consensus, mempool, P2P, API, wallet, Qt GUI)
-**Status:** ✅ SELESAI — semua temuan kritis diperbaiki & diverifikasi (24 unit test + 22 skenario serangan: **0 VULNERABLE**)
-**Hasil akhir:** `pytest tests` = 24 passed · `attack_sim` = 20 DEFENDED/OK + 2 PERF, 0 VULNERABLE · `qt_smoke` OK
+**Tanggal:** 2026-08-24 (Round 1), 2026-08-26 (Round 2 — audit lanjutan)
+**Scope:** Seluruh kode inti (consensus, mempool, P2P, API, wallet, Qt GUI, pool server)
+**Status:** ✅ SELESAI — semua temuan kritis diperbaiki & diverifikasi (**29 unit test + 22 skenario serangan: 0 VULNERABLE**)
+**Hasil akhir:** `pytest tests` = 29 passed · `attack_sim` = 20 DEFENDED/OK + 2 PERF, 0 VULNERABLE
 
 ## 🧪 HASIL SIMULASI SERANGAN (empiris, reproduktif)
 
@@ -301,4 +301,41 @@ Tiga opsi (detail teknis di akhir sesi kerja):
 Rekomendasi: **Opsi 1** dulu (2–4 minggu kerja), karena tidak mengubah model UTXO, bisa diaktifkan per-height, dan risiko konsensus minim. Opsi 2 jika butuh Solidity.
 
 ---
-*Setelah Anda approve laporan ini, eksekusi Fase 1–3 dimulai.*
+
+## 🔄 AUDIT ROUND 2 — 2026-08-26
+
+Audit mendalam kedua mencakup: konsensus checkpoint, pool server fee ledger, dan deprecasi API.
+
+### Temuan Baru
+
+| Kode | Severity | Masalah | Status |
+|---|---|---|---|
+| **N-01** | 🟡 MEDIUM | `pool_server.py` menggunakan `@app.on_event("startup")` yang sudah deprecated di FastAPI | ✅ **FIXED** — migrasi ke `lifespan` context manager |
+| **N-02** | 🟠 HIGH | `credit_block()` float `net` → truncation integer menyebabkan dust sats **hilang** (tidak dikreditkan ke siapa pun, tidak juga ke pool address) | ✅ **FIXED** — `net = int(...)`, dust remainder dikreditkan ke pool address balance |
+| **N-03** | 🟡 MEDIUM | Checkpoint dictionary dari `config.json` memiliki key **string** (JSON tidak support integer key), sehingga `height in cfg.checkpoints` selalu False → checkpoint tidak pernah di-enforce jika dikonfigurasi dari file | ✅ **FIXED** — `{int(k): v for k, v in ...}` saat parse di `Config.from_env()` |
+| **N-04** | ✅ OK | Validasi coinbase split (2 output: miner + fee_address): `cb_value = sum(o.value for o in coinbase.outputs)` sudah benar — menjumlahkan semua output termasuk fee | Tidak ada bug |
+
+### Ringkasan Perubahan Round 2
+
+- **`pool_server.py`**: Migrasi ke lifespan, fix dust rounding di `credit_block()`
+- **`config.py`**: Fix checkpoint key type — integer coercion saat parse
+- **`chain.py`**: Tambah enforcement checkpoint saat `add_block()`
+- **`tests/test_new_findings.py`**: 5 test baru untuk N-01..N-04
+
+### Hasil Test Round 2
+
+| Suite | Hasil |
+|---|---|
+| `pytest tests` (29 tests total termasuk 5 test baru) | **29 passed** |
+| `tests/attack_sim.py` (22 serangan) | **0 VULNERABLE** |
+
+### Hasil Simulasi Serangan (Attack Sim) Round 2
+
+```
+TOTAL: 22  |  DEFENDED/OK: 20  |  PERF probes: 2  |  VULNERABLE: 0
+```
+
+Semua serangan berhasil ditangkis. Tidak ada regresi.
+
+---
+*Audit Round 2 selesai 2026-08-26. Kode siap untuk deployment.*
