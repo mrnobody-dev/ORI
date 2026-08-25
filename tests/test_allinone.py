@@ -47,6 +47,11 @@ def main():
         r = c.get("/pool/stats")
         assert r.status_code == 200 and "leaderboard" in r.json()
 
+        # HTML dashboard
+        r = c.get("/pool")
+        assert r.status_code == 200, r.text
+        assert "PPLNS Pool" in r.text and "auto-refresh" in r.text
+
     print("ALLINONE_OK")
 
 

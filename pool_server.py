@@ -41,6 +41,7 @@ import hashlib
 import struct
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from bech32 import validate_address
@@ -421,3 +422,81 @@ def pool_stats():
         ],
         "balances": LEDGER.balances,
     }
+
+
+def _dashboard_html() -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ORI PPLNS Pool</title>
+<style>
+ :root {{ --bg:#0d1117; --card:#161b22; --line:#21262d; --fg:#e6edf3;
+          --dim:#8b949e; --acc:#f5a623; --ok:#3fb950; }}
+ * {{ box-sizing:border-box; margin:0; padding:0; }}
+ body {{ background:var(--bg); color:var(--fg);
+        font-family:ui-monospace,Consolas,monospace; padding:24px; }}
+ h1 {{ font-size:20px; }} h1 span{{color:var(--acc)}}
+ .sub {{ color:var(--dim); font-size:12px; margin:6px 0 18px; word-break:break-all; }}
+ .cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+          gap:12px; margin-bottom:20px; }}
+ .card {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+         padding:14px; }}
+ .card .v {{ font-size:22px; font-weight:700; margin-top:4px; }}
+ .card .k {{ color:var(--dim); font-size:11px; text-transform:uppercase;
+           letter-spacing:.08em; }}
+ table {{ width:100%; border-collapse:collapse; background:var(--card);
+         border:1px solid var(--line); border-radius:10px; overflow:hidden; }}
+ th {{ text-align:left; color:var(--dim); font-size:11px; text-transform:uppercase;
+     letter-spacing:.08em; padding:10px 14px; border-bottom:1px solid var(--line); }}
+ td {{ padding:10px 14px; border-bottom:1px solid var(--line); font-size:13px; }}
+ tr:last-child td {{ border-bottom:none; }}
+ .bar {{ height:6px; background:var(--line); border-radius:3px; overflow:hidden;
+       margin-top:8px; }}
+ .bar i {{ display:block; height:100%; background:var(--acc); }}
+ .muted {{ color:var(--dim); font-size:12px; margin-top:10px; }}
+ .refresh {{ color:var(--dim); font-size:11px; margin-top:14px; }}
+</style></head><body>
+<h1>ORI <span>PPLNS Pool</span></h1>
+<div class="sub">payout <b>{POOL_ADDRESS}</b> &nbsp;·&nbsp; fee {POOL_FEE_PCT}% &nbsp;·&nbsp; node {POOL_NODE_URL}</div>
+<div class="cards">
+ <div class="card"><div class="k">Blocks found</div><div class="v" id="blocks">–</div></div>
+ <div class="card"><div class="k">Total shares</div><div class="v" id="shares">–</div></div>
+ <div class="card"><div class="k">Workers</div><div class="v" id="workers">–</div></div>
+ <div class="card"><div class="k">PPLNS window</div><div class="v" id="window">–</div></div>
+</div>
+<div class="bar"><i id="winbar" style="width:0%"></i></div>
+<table>
+ <thead><tr><th>#</th><th>Worker</th><th>Window shares</th><th>Balance</th></tr></thead>
+ <tbody id="rows"><tr><td colspan="4" style="color:var(--dim)">loading…</td></tr></tbody>
+</table>
+<div class="muted">Rewards are credited per PPLNS window when the pool finds a block
+(minus {POOL_FEE_PCT}% fee). Coins mature after 100 blocks.</div>
+<div class="refresh">auto-refresh 15s · last update <span id="ts">–</span></div>
+<script>
+const fmt=sats=>(sats/1e8).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:8}})+' ORI';
+async function load(){{
+ try {{
+  const s=await (await fetch('/pool/stats')).json();
+  document.getElementById('blocks').textContent=s.blocks_found.toLocaleString();
+  document.getElementById('shares').textContent=s.shares_accepted.toLocaleString();
+  document.getElementById('workers').textContent=(s.workers||[]).length;
+  document.getElementById('window').textContent=
+     s.window_points.toLocaleString()+' / '+s.pplns_points_max.toLocaleString();
+  document.getElementById('winbar').style.width=
+     Math.min(100,100*s.window_points/s.pplns_points_max)+'%';
+  const rows=(s.leaderboard||[]).map((e,i)=>`<tr><td>${{i+1}}</td>`+
+    `<td>${{e.worker.slice(0,18)}}…</td><td>${{e.window_shares.toLocaleString()}}</td>`+
+    `<td>${{fmt(e.balance_sats)}}</td></tr>`);
+  document.getElementById('rows').innerHTML=
+     rows.length?rows.join(''):'<tr><td colspan="4" style="color:#8b949e">'+
+     'no miners yet — be the first: miner-ori.exe --address ori1... --pool</td></tr>';
+  document.getElementById('ts').textContent=new Date().toLocaleTimeString();
+ }} catch(e){{}}
+}}
+load(); setInterval(load,15000);
+</script></body></html>"""
+
+
+@app.get("/pool", response_class=HTMLResponse, include_in_schema=False)
+def pool_dashboard():
+    return _dashboard_html()
