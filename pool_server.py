@@ -165,6 +165,7 @@ class Ledger:
         self.blocks_history: deque = deque(maxlen=50)      # found-block log
         self.saved_at: float = 0.0
         self._primary_valid = False   # can we safely rotate primary -> .bak?
+        self._saves_done = 0
         self._load()
 
     @staticmethod
@@ -245,6 +246,16 @@ class Ledger:
             os.replace(tmp, LEDGER_PATH)
             self._primary_valid = True
             self.saved_at = time.time()
+            self._saves_done += 1
+            # Periodic visible proof-of-persistence in deploy logs.
+            if self._saves_done % 10 == 1 or self._saves_done == 1:
+                print(f"[pool] ledger SAVED #{self._saves_done}: "
+                      f"path={LEDGER_PATH} "
+                      f"bytes={os.path.getsize(LEDGER_PATH)} "
+                      f"balances={len(self.balances)} "
+                      f"window={len(self.window)} "
+                      f"blocks={self.total_blocks} "
+                      f"shares={self.total_shares}", flush=True)
         except Exception as exc:
             # LOUD failure — silent data loss is unacceptable
             print(f"[pool] !!! LEDGER SAVE FAILED: {exc}", flush=True)
@@ -566,6 +577,39 @@ def _stats_snapshot() -> dict:
             "latest_blocks": list(sorted(
                 LEDGER.blocks_history, key=lambda b: -b.get("height", 0)))[:15],
         }
+
+
+@app.get("/pool/ledger")
+def pool_ledger_info():
+    """Physical proof of persistence: file, size, hash, backup state."""
+    import hashlib
+
+    def finfo(path):
+        if not os.path.exists(path):
+            return None
+        raw = open(path, "rb").read()
+        return {
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest()[:16],
+            "modified_age_s": int(time.time() - os.path.getmtime(path)),
+        }
+
+    return {
+        "path": LEDGER_PATH,
+        "on_volume": LEDGER_PATH.startswith("/data"),
+        "primary": finfo(LEDGER_PATH),
+        "backup": finfo(LEDGER_PATH + ".bak"),
+        "saved_at_iso": (time.strftime(
+            "%Y-%m-%d %H:%M:%S UTC", time.gmtime(LEDGER.saved_at))
+            if LEDGER.saved_at else "never"),
+        "saves_done": LEDGER._saves_done,
+        "totals": {
+            "blocks_found": LEDGER.total_blocks,
+            "shares_accepted": LEDGER.total_shares,
+            "window_points": len(LEDGER.window),
+            "balances_sats": LEDGER.balances,
+        },
+    }
 
 
 @app.get("/pool/stats")
