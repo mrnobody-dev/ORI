@@ -44,13 +44,20 @@ def main():
         r = c.get("/pool/job", params={"worker": os.environ["POOL_ADDRESS"]})
         assert r.status_code != 404, f"/pool/job missing: {r.status_code}"
 
-        r = c.get("/pool/stats")
-        assert r.status_code == 200 and "leaderboard" in r.json()
-
-        # HTML dashboard
+        # HTML dashboard (overview)
         r = c.get("/pool")
         assert r.status_code == 200, r.text
-        assert "PPLNS Pool" in r.text and "auto-refresh" in r.text
+        assert "PPLNS Pool" in r.text and "Estimated hashrate" in r.text
+
+        # stats: browser gets HTML, programmatic client gets JSON
+        r = c.get("/pool/stats", headers={"Accept": "text/html"})
+        assert r.status_code == 200 and "Latest found blocks" in r.text
+        r = c.get("/pool/stats")
+        j = r.json()
+        assert "leaderboard" in j and "estimated_hashrate" in j
+        r = c.get("/pool/stats", params={"json": "1"},
+                  headers={"Accept": "text/html"})
+        assert r.json()["blocks_found"] == j["blocks_found"]
 
     print("ALLINONE_OK")
 

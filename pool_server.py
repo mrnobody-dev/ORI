@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hashlib
 import struct
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -148,12 +148,13 @@ LEDGER_PATH = os.path.join(POOL_DATA_DIR, "ledger.json")
 class Ledger:
     def __init__(self):
         os.makedirs(POOL_DATA_DIR, exist_ok=True)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.window: deque = deque(maxlen=PPLNS_POINTS)   # [(worker_addr)]
         self.balances: dict[str, int] = {}                 # addr -> sats credited
         self.total_blocks = 0
         self.total_shares = 0
         self.workers: dict[str, dict] = {}                 # addr -> vardiff state
+        self.blocks_history: deque = deque(maxlen=50)      # found-block log
         self._load()
 
     def _load(self):
@@ -164,6 +165,7 @@ class Ledger:
             self.balances = d.get("balances", {})
             self.total_blocks = d.get("total_blocks", 0)
             self.total_shares = d.get("total_shares", 0)
+            self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
         except Exception:
             pass
 
@@ -175,6 +177,7 @@ class Ledger:
                     "balances": self.balances,
                     "total_blocks": self.total_blocks,
                     "total_shares": self.total_shares,
+                    "blocks_history": list(self.blocks_history),
                 }, f)
         except Exception:
             pass
@@ -183,12 +186,15 @@ class Ledger:
         with self.lock:
             self.window.append(worker)
             self.total_shares += 1
-            w = self.workers.setdefault(worker, {"shift": POOL_DIFF_SHIFT,
-                                                 "last": time.time(), "shares": 0})
+            w = self.workers.setdefault(worker, {
+                "shift": POOL_DIFF_SHIFT, "last": time.time(),
+                "shares": 0, "recent": deque(maxlen=600),
+            })
             now = time.time()
             dt = now - w["last"]
             w["last"] = now
             w["shares"] += 1
+            w.setdefault("recent", deque(maxlen=600)).append(now)
             if dt < SHARE_FAST_SEC:
                 w["shift"] = max(MIN_SHIFT, w["shift"] - 1)
             elif dt > SHARE_SLOW_SEC:
@@ -198,7 +204,7 @@ class Ledger:
                 self.save()
         return new_shift
 
-    def credit_block(self, reward_sats: int) -> dict:
+    def credit_block(self, reward_sats: int, height: int) -> dict:
         with self.lock:
             total_pts = len(self.window)
             payout: dict[str, int] = {}
@@ -212,6 +218,13 @@ class Ledger:
                     self.balances[w] = self.balances.get(w, 0) + amt
                     payout[w] = amt
             self.total_blocks += 1
+            self.blocks_history.append({
+                "height": height,
+                "found_at": int(time.time()),
+                "reward_sats": reward_sats,
+                "window_points": total_pts,
+                "n_workers": len(payout),
+            })
             self.save()
             return payout
 
@@ -421,7 +434,7 @@ def pool_submit(body: SubmitReq):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:200]
             raise HTTPException(status_code=502, detail=f"node rejected block: {detail}")
-        payout = LEDGER.credit_block(int(job["reward_sats"]))
+        payout = LEDGER.credit_block(int(job["reward_sats"]), int(job["height"]))
         TPL.refresh()
         return {
             "accepted": True,
@@ -435,26 +448,200 @@ def pool_submit(body: SubmitReq):
         }
 
 
-@app.get("/pool/stats")
-def pool_stats():
+def _fmt_hashrate(hps: float) -> str:
+    for unit, div in (("PH/s", 1e15), ("TH/s", 1e12), ("GH/s", 1e9), ("MH/s", 1e6)):
+        if hps >= div:
+            return f"{hps/div:.2f} {unit}"
+    return f"{hps/1e3:.2f} kH/s" if hps >= 1e3 else f"{hps:.0f} H/s"
+
+
+def _stats_snapshot() -> dict:
+    """Everything the JSON API and the HTML pages need, in one snapshot."""
+    now = time.time()
+    tpl = TPL.get()
+    node_target = target_from_bits(int(tpl["bits"])) if tpl else None
     with LEDGER.lock:
         win_counts: dict[str, int] = {}
         for w in LEDGER.window:
             win_counts[w] = win_counts.get(w, 0) + 1
-    return {
-        "blocks_found": LEDGER.total_blocks,
-        "shares_accepted": LEDGER.total_shares,
-        "workers": sorted(LEDGER.workers.keys()),
-        "window_points": len(LEDGER.window),
-        "pplns_points_max": PPLNS_POINTS,
-        "fee_pct": POOL_FEE_PCT,
-        "leaderboard": [
-            {"worker": k, "window_shares": v,
-             "balance_sats": LEDGER.balances.get(k, 0)}
-            for k, v in sorted(win_counts.items(), key=lambda kv: -kv[1])
-        ],
-        "balances": LEDGER.balances,
-    }
+        miners = []
+        total_hr = 0.0
+        for addr in sorted(LEDGER.workers.keys()):
+            w = LEDGER.workers[addr]
+            recent = [t for t in w.get("recent", ()) if now - t < 900]
+            shift = int(w.get("shift", POOL_DIFF_SHIFT))
+            hr = 0.0
+            if node_target and recent:
+                expected = (1 << 256) // (node_target << shift)
+                hr = len(recent) / 900.0 * expected
+            total_hr += hr
+            miners.append({
+                "worker": addr,
+                "window_shares": win_counts.get(addr, 0),
+                "total_shares": int(w.get("shares", 0)),
+                "balance_sats": LEDGER.balances.get(addr, 0),
+                "shift": shift,
+                "hashrate_hps": round(hr, 2),
+                "last_share_age": int(now - w.get("last", now)),
+            })
+        return {
+            "blocks_found": LEDGER.total_blocks,
+            "shares_accepted": LEDGER.total_shares,
+            "workers_count": len(LEDGER.workers),
+            "window_points": len(LEDGER.window),
+            "pplns_points_max": PPLNS_POINTS,
+            "fee_pct": POOL_FEE_PCT,
+            "estimated_hashrate_hps": round(total_hr, 2),
+            "estimated_hashrate": _fmt_hashrate(total_hr),
+            "node_tip_height": (tpl or {}).get("height"),
+            "node_reachable": TPL.last_error == "",
+            "leaderboard": sorted(miners, key=lambda m: -m["window_shares"]),
+            "latest_blocks": list(sorted(
+                LEDGER.blocks_history, key=lambda b: -b.get("height", 0)))[:15],
+        }
+
+
+@app.get("/pool/stats")
+def pool_stats(request: Request, json: int = Query(0)):
+    snap = _stats_snapshot()
+    # Browser → human page; programmatic clients (Accept: application/json
+    # or ?json=1) keep getting the raw JSON feed.
+    if json or "text/html" not in (request.headers.get("accept") or ""):
+        return {
+            "blocks_found": snap["blocks_found"],
+            "shares_accepted": snap["shares_accepted"],
+            "workers": [m["worker"] for m in snap["leaderboard"]],
+            "window_points": snap["window_points"],
+            "pplns_points_max": snap["pplns_points_max"],
+            "fee_pct": snap["fee_pct"],
+            "estimated_hashrate": snap["estimated_hashrate"],
+            "estimated_hashrate_hps": snap["estimated_hashrate_hps"],
+            "node_tip_height": snap["node_tip_height"],
+            "node_reachable": snap["node_reachable"],
+            "leaderboard": [
+                {"worker": m["worker"], "window_shares": m["window_shares"],
+                 "balance_sats": m["balance_sats"]}
+                for m in snap["leaderboard"]
+            ],
+            "balances": {m["worker"]: m["balance_sats"] for m in snap["leaderboard"]},
+            "latest_blocks": snap["latest_blocks"],
+        }
+    return HTMLResponse(_render_page(snap, detail=True))
+
+
+_PAGE_CSS = """
+:root{--bg:#0b0e14;--panel:#12161f;--panel2:#171c26;--line:#232a36;--fg:#e6edf3;
+ --dim:#8b98a9;--acc:#f7b32b;--acc2:#4da3ff;--ok:#3fb950;--red:#f85149}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:14px}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 18px}
+header{background:linear-gradient(120deg,#141a26,#1d2433 60%,#23304a);border-bottom:2px solid var(--acc);padding:18px;border-radius:0 0 14px 14px}
+.logo{font-size:22px;font-weight:800;letter-spacing:.5px}.logo span{color:var(--acc)}
+.tag{color:var(--dim);font-size:12px;margin-top:6px;word-break:break-all}
+.pill{display:inline-block;background:var(--line);border-radius:20px;padding:3px 12px;font-size:11px;margin-right:8px;margin-top:10px;color:var(--dim)}
+.pill.ok{color:var(--ok)}.pill.bad{color:var(--red)}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--acc);margin:26px 0 12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+.card .v{font-size:24px;font-weight:800;margin-top:6px}
+.card .s{color:var(--dim);font-size:11px;margin-top:4px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),#ffd166)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th{background:var(--panel2);text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.8px;padding:10px 14px}
+td{padding:10px 14px;border-top:1px solid var(--line);font-size:13px}
+tr:hover td{background:#161d29}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.dim{color:var(--dim)}.ok{color:var(--ok)}.num{text-align:right;font-family:ui-monospace,Consolas,monospace}
+.hbar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;min-width:80px}
+.hbar i{display:block;height:100%;background:var(--acc2)}
+footer{color:var(--dim);font-size:11px;text-align:center;padding:26px;line-height:1.8}
+footer a{color:var(--acc)}
+"""
+
+
+def _render_page(snap: dict, detail: bool) -> str:
+    lb_rows = "".join(
+        f"<tr><td>{i+1}</td>"
+        f"<td class='mono'>{m['worker'][:22]}…</td>"
+        f"<td>{_fmt_hashrate(m['hashrate_hps'])}</td>"
+        f"<td class='num'>{m['window_shares']:,}</td>"
+        f"<td class='num'>{m['total_shares']:,}</td>"
+        f"<td class='num'>{m['balance_sats']/1e8:,.8f} ORI</td>"
+        f"<td>{'online' if m['last_share_age'] < 300 else 'idle ' + str(m['last_share_age']) + 's'}</td></tr>"
+        for i, m in enumerate(snap["leaderboard"]))
+    max_ws = max([m["window_shares"] for m in snap["leaderboard"]] or [1])
+    lb_bars = "".join(
+        f"<tr><td class='mono'>{m['worker'][:22]}…</td>"
+        f"<td><div class='hbar'><i style='width:{100*m['window_shares']/max_ws:.0f}%'></i></div></td></tr>"
+        for m in snap["leaderboard"])
+    block_rows = "".join(
+        f"<tr><td><a href='/explorer#/block/{b['height']}' style='color:var(--acc2)'>#{b['height']:,}</a></td>"
+        f"<td class='mono'>{time.strftime('%Y-%m-%d %H:%M', time.gmtime(b['found_at']))} UTC</td>"
+        f"<td class='num'>{b['reward_sats']/1e8:,.8f} ORI</td>"
+        f"<td class='num'>{b['window_points']:,}</td>"
+        f"<td class='num'>{b['n_workers']}</td></tr>"
+        for b in snap["latest_blocks"])
+    reach = ("<span class='pill ok'>● node online</span>" if snap["node_reachable"]
+             else "<span class='pill bad'>● node offline — " +
+                  (TPL.last_error[:60] or "") + "</span>")
+    window_pct = 100 * snap["window_points"] / max(1, snap["pplns_points_max"])
+    detail_extra = (
+        f"<h2>Window share distribution</h2>"
+        f"<table><tr><th>Worker</th><th>Share of PPLNS window</th></tr>{lb_bars}</table>"
+        if detail and snap["leaderboard"] else "")
+    blocks_section = (
+        "<h2>Latest found blocks</h2>"
+        "<table><tr><th>Height</th><th>Found at (UTC)</th><th class='num'>Reward</th>"
+        "<th class='num'>Window pts</th><th class='num'>Workers paid</th></tr>"
+        + (block_rows or "<tr><td colspan='5' class='dim'>No blocks yet — the "
+           "first one is always the hardest. Keep mining!</td></tr>")
+        + "</table>")
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>ORI PPLNS Pool</title><style>{_PAGE_CSS}</style></head><body>
+<header><div class="wrap" style="padding:0">
+ <div class="logo">ORI <span>PPLNS Pool</span></div>
+ <div class="tag">payout address <b>{POOL_ADDRESS}</b> · fee {POOL_FEE_PCT}% ·
+   node {POOL_NODE_URL}</div>
+ {reach}<span class="pill">network height {snap.get('node_tip_height') or '—'}</span>
+ <span class="pill">PPLNS N = {snap['pplns_points_max']:,} shares</span>
+</div></header>
+<div class="wrap">
+ <h2>Pool statistics</h2>
+ <div class="cards">
+  <div class="card"><div class="k">Estimated hashrate</div><div class="v">{snap['estimated_hashrate']}</div><div class="s">from last 15 min of shares</div></div>
+  <div class="card"><div class="k">Blocks found</div><div class="v">{snap['blocks_found']:,}</div><div class="s">since pool start</div></div>
+  <div class="card"><div class="k">Miners</div><div class="v">{snap['workers_count']:,}</div><div class="s">registered workers</div></div>
+  <div class="card"><div class="k">Shares accepted</div><div class="v">{snap['shares_accepted']:,}</div><div class="s">all time</div></div>
+ </div>
+ <h2>PPLNS window</h2>
+ <div class="card">
+  <div class="k">Window fill</div>
+  <div class="v">{snap['window_points']:,} / {snap['pplns_points_max']:,} pts</div>
+  <div class="bar"><i style="width:{min(100, window_pct):.1f}%"></i></div>
+  <div class="s" style="margin-top:8px">Rewards are split proportionally over the
+  newest {snap['pplns_points_max']:,} shares whenever a block is found (fee {POOL_FEE_PCT}%).
+  Oldest points slide out as new ones arrive.</div>
+ </div>
+ <h2>Leaderboard</h2>
+ <table><tr><th>#</th><th>Worker</th><th>Hashrate (est.)</th><th class='num'>Window shares</th>
+ <th class='num'>Total shares</th><th class='num'>Balance</th><th>Status</th></tr>
+ {lb_rows or "<tr><td colspan='7' class='dim'>No miners yet.</td></tr>"}</table>
+ {detail_extra}
+ {blocks_section}
+ <footer>Served by your self-hosted ORI pool · <a href="/explorer#/blocks">block explorer</a>
+ · <a href="/pool/stats?json=1">JSON API</a> · rewards mature after 100 blocks ·
+ auto-refresh 30s</footer>
+</div></body></html>"""
+
+
+@app.get("/pool", response_class=HTMLResponse, include_in_schema=False)
+def pool_dashboard():
+    return _render_page(_stats_snapshot(), detail=False)
 
 
 def _dashboard_html() -> str:
