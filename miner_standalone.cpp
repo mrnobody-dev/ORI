@@ -405,7 +405,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--host" && i + 1 < argc) host = argv[++i];
         else if (arg == "--port" && i + 1 < argc) port = std::stoi(argv[++i]);
         else if (arg == "--address" && i + 1 < argc) address = argv[++i];
-        else if (arg == "--threads" && i + 1 < argc) {
+        else if ((arg == "--threads" || arg == "--thread") && i + 1 < argc) {
             int t = std::stoi(argv[++i]);
             // Clamp: at least 1, at most all physical cores.
             threads = std::max(1, std::min(t, hw_cores));
