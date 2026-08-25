@@ -283,10 +283,10 @@ class Peer(threading.Thread):
 
     def _dispatch(self, cmd: str, payload: bytes):
         self.last_seen = now()
-        # Handshake gate: refuse everything except version/ping/pong until
-        # verack completes (Bitcoin Core rule). Prevents anonymous resource
-        # drain before the peer identifies itself.
-        if not self.handshake_complete and cmd not in ("version", "ping", "pong"):
+        # Handshake gate: refuse everything except the handshake trio
+        # (version/verack) and keepalive ping/pong until verack completes.
+        # verack MUST be allowed pre-handshake — it completes the handshake.
+        if not self.handshake_complete and cmd not in ("version", "verack", "ping", "pong"):
             self._add_ban_score("protocol_violation")
             logger.warn(LogCategory.P2P, "Message before handshake - rejected",
                         peer=_peer_label(self.addr), msg=cmd)
