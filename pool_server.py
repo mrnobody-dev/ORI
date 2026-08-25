@@ -215,6 +215,24 @@ class Ledger:
         self._primary_valid = False
         print("[pool] starting with EMPTY ledger (no valid snapshot found)",
               flush=True)
+        # One-shot recovery hook: seed balances when starting from zero.
+        # Set POOL_LEDGER_SEED='{"ori1...": sats, ...}' exactly once, redeploy,
+        # then REMOVE the variable so it never re-applies.
+        seed = os.environ.get("POOL_LEDGER_SEED")
+        if seed:
+            try:
+                seeded = json.loads(seed)
+                applied = {}
+                for addr, sats in seeded.items():
+                    if validate_address(addr) and int(sats) > 0:
+                        self.balances[addr] = int(sats)
+                        applied[addr] = int(sats)
+                if applied:
+                    print(f"[pool] LEDGER SEEDED from POOL_LEDGER_SEED: "
+                          f"{applied}", flush=True)
+                    self.save()
+            except Exception as exc:
+                print(f"[pool] POOL_LEDGER_SEED ignored ({exc})", flush=True)
 
     def save(self):
         """Atomic durable write: fsync tmp -> rotate old to .bak -> replace."""
