@@ -126,7 +126,63 @@ https://ori-pool.up.railway.app/pool/stats
 
 ---
 
-## 4. Troubleshooting
+## 4. Full Variable Reference (copy-paste)
+
+### Wajib (all-in-one service)
+```env
+BTPY_API_TOKEN=ganti-dengan-token-acak-panjang
+POOL_ADDRESS=ori1qhk4y7c2mqzkq4x9esgdgkh7lylueay3ek9ej5n
+BTPY_DATA_DIR=/data
+```
+
+### Pool (opsional — default masuk akal)
+```env
+POOL_FEE_PCT=1.0          # fee pool dalam persen
+PPLNS_POINTS=100000       # ukuran window PPLNS (satuan share)
+POOL_DIFF_SHIFT=12        # kesulitan share awal (node_target * 2^shift)
+POOL_MIN_SHIFT=4          # vardiff bawah (paling keras)
+POOL_MAX_SHIFT=24         # vardiff atas (paling mudah)
+SHARE_FAST_SEC=5          # share < X detik -> perkeras otomatis
+SHARE_SLOW_SEC=45         # share > X detik -> dimudahkan otomatis
+```
+
+### Node & jaringan (opsional)
+```env
+BTPY_API_HOST=0.0.0.0             # bind API
+BTPY_API_PORT=8000                # diabaikan jika PORT diset oleh platform
+BTPY_P2P_HOST=0.0.0.0             # bind P2P
+BTPY_P2P_PORT=26000               # harus cocok dgn target TCP Proxy
+BTPY_ENABLE_P2P=1                 # 0 = node solo tanpa peer
+BTPY_SEED_PEERS=host:port,host:port
+BTPY_MAX_MEMPOOL_TXS=100000       # kapasitas mempool
+BTPY_MAX_SIDE_BRANCH_BLOCKS=512   # batas penyimpanan fork lemah (anti disk-fill)
+BTPY_COINBASE_MATURITY=100        # blok sebelum reward bisa dibelanjakan
+```
+
+### DNS seed internal (opsional, biasanya kosong di Railway)
+```env
+BTPY_SEED_DNS_HOST=
+BTPY_SEED_DNS_PORT=5353
+BTPY_SEED_DNS_NAME=seed.ori
+BTPY_SEED_DNS_P2P_PORT=8033
+```
+
+### Logging (opsional)
+```env
+ORI_LOG_LEVEL=INFO            # DEBUG|INFO|WARN|ERROR|CRITICAL
+ORI_LOG_CONSOLE=1             # log ke stdout (terlihat di Railway Logs)
+ORI_LOG_FILE=0                # 0 = hemat disk volume
+ORI_LOG_JSON=1
+ORI_LOG_MAX_MB=10
+ORI_LOG_BACKUP=3
+# per-kategori: ORI_LOG_P2P / ORI_LOG_CHAIN / ORI_LOG_MEMPOOL /
+# ORI_LOG_CONSENSUS / ORI_LOG_SYNC = DEBUG|INFO|WARN|ERROR
+```
+
+> ⚠️ JANGAN set `BTPY_REQUIRE_API_TOKEN_WHEN_PUBLIC=0` pada node publik —
+> tanpa token siapa pun bisa submit blok/flood node Anda.
+
+## 5. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -136,7 +192,7 @@ https://ori-pool.up.railway.app/pool/stats
 | Pool job returns 503 | `POOL_NODE_URL` wrong or node still starting / syncing. |
 | Shares rejected "stale job" | Round took too long — vardiff will make it easier automatically. |
 
-## 5. Local test before deploying
+## 6. Local test before deploying
 
 ```bash
 # terminal 1 — node

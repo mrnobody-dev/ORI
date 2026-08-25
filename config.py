@@ -153,6 +153,7 @@ class Config:
                 _env_or_file("BTPY_P2P_PEER_LOG_INTERVAL_SECONDS", "p2p_peer_log_interval_seconds", "60")
             ),
             max_mempool_txs=int(_env_or_file("BTPY_MAX_MEMPOOL_TXS", "max_mempool_txs", "100000")),
+            max_side_branch_blocks=int(_env_or_file("BTPY_MAX_SIDE_BRANCH_BLOCKS", "max_side_branch_blocks", "512")),
             api_token=str(_env_or_file("BTPY_API_TOKEN", "api_token", "")),
             require_api_token_when_public=str(
                 _env_or_file("BTPY_REQUIRE_API_TOKEN_WHEN_PUBLIC", "require_api_token_when_public", "1")
