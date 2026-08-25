@@ -146,6 +146,14 @@ LEDGER_PATH = os.path.join(POOL_DATA_DIR, "ledger.json")
 
 
 class Ledger:
+    """Persistent PPLNS state.
+
+    Durability guarantees (hardened after redeploy-loss report):
+    - every accepted share is flushed atomically (tmp + fsync + os.replace)
+    - previous good copy kept as ledger.json.bak; corrupt primary falls back
+      to it instead of silently starting from zero
+    - worker vardiff/share counters persisted alongside balances/window"""
+
     def __init__(self):
         os.makedirs(POOL_DATA_DIR, exist_ok=True)
         self.lock = threading.RLock()
@@ -155,32 +163,91 @@ class Ledger:
         self.total_shares = 0
         self.workers: dict[str, dict] = {}                 # addr -> vardiff state
         self.blocks_history: deque = deque(maxlen=50)      # found-block log
+        self.saved_at: float = 0.0
+        self._primary_valid = False   # can we safely rotate primary -> .bak?
         self._load()
 
+    @staticmethod
+    def _read_snapshot(path: str) -> dict:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            raise ValueError("ledger root is not an object")
+        return d
+
+    def _apply(self, d: dict):
+        self.window = deque(d.get("window", []), maxlen=PPLNS_POINTS)
+        self.balances = {k: int(v) for k, v in d.get("balances", {}).items()}
+        self.total_blocks = int(d.get("total_blocks", 0))
+        self.total_shares = int(d.get("total_shares", 0))
+        self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
+        for addr, w in d.get("workers", {}).items():
+            self.workers[addr] = {
+                "shift": int(w.get("shift", POOL_DIFF_SHIFT)),
+                "shares": int(w.get("shares", 0)),
+                "last": float(w.get("last", time.time())),
+                "recent": deque(maxlen=600),
+            }
+
     def _load(self):
-        try:
-            with open(LEDGER_PATH, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            self.window = deque(d.get("window", []), maxlen=PPLNS_POINTS)
-            self.balances = d.get("balances", {})
-            self.total_blocks = d.get("total_blocks", 0)
-            self.total_shares = d.get("total_shares", 0)
-            self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
-        except Exception:
-            pass
+        import shutil
+
+        candidates = [LEDGER_PATH, LEDGER_PATH + ".bak"]
+        for path in candidates:
+            try:
+                d = self._read_snapshot(path)
+                self._apply(d)
+                self.saved_at = time.time()
+                # Only rotate primary->bak on save if the CURRENT primary was
+                # readable; never overwrite a good backup with corrupt data.
+                self._primary_valid = path == LEDGER_PATH
+                print(f"[pool] ledger restored from {path}: "
+                      f"balances={len(self.balances)} "
+                      f"window={len(self.window)} blocks={self.total_blocks} "
+                      f"shares={self.total_shares}", flush=True)
+                return
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                print(f"[pool] LEDGER {path} unreadable ({exc}) — "
+                      f"trying backup...", flush=True)
+        self._primary_valid = False
+        print("[pool] starting with EMPTY ledger (no valid snapshot found)",
+              flush=True)
 
     def save(self):
+        """Atomic durable write: fsync tmp -> rotate old to .bak -> replace."""
+        import shutil
+
+        snapshot = {
+            "version": 2,
+            "saved_at": int(time.time()),
+            "window": list(self.window),
+            "balances": self.balances,
+            "total_blocks": self.total_blocks,
+            "total_shares": self.total_shares,
+            "blocks_history": list(self.blocks_history),
+            "workers": {
+                k: {"shift": w.get("shift", POOL_DIFF_SHIFT),
+                    "shares": w.get("shares", 0),
+                    "last": w.get("last", 0)}
+                for k, w in self.workers.items()
+            },
+        }
+        tmp = LEDGER_PATH + ".tmp"
         try:
-            with open(LEDGER_PATH, "w", encoding="utf-8") as f:
-                json.dump({
-                    "window": list(self.window),
-                    "balances": self.balances,
-                    "total_blocks": self.total_blocks,
-                    "total_shares": self.total_shares,
-                    "blocks_history": list(self.blocks_history),
-                }, f)
-        except Exception:
-            pass
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f)
+                f.flush()
+                os.fsync(f.fileno())
+            if self._primary_valid and os.path.exists(LEDGER_PATH):
+                shutil.copyfile(LEDGER_PATH, LEDGER_PATH + ".bak")
+            os.replace(tmp, LEDGER_PATH)
+            self._primary_valid = True
+            self.saved_at = time.time()
+        except Exception as exc:
+            # LOUD failure — silent data loss is unacceptable
+            print(f"[pool] !!! LEDGER SAVE FAILED: {exc}", flush=True)
 
     def add_share(self, worker: str):
         with self.lock:
@@ -200,8 +267,8 @@ class Ledger:
             elif dt > SHARE_SLOW_SEC:
                 w["shift"] = min(MAX_SHIFT, w["shift"] + 1)
             new_shift = w["shift"]
-            if self.total_shares % 25 == 0:
-                self.save()
+            # flush EVERY share — redeploy/crash must never eat work
+            self.save()
         return new_shift
 
     def credit_block(self, reward_sats: int, height: int) -> dict:
