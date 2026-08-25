@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORI PPLNS Mining Pool</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(23, 31, 50, 0.7);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --secondary: #8b5cf6;
+            --accent: #10b981;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.15), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.15), transparent 25%);
+            background-attachment: fixed;
+            overflow-x: hidden;
+        }
+
+        header {
+            padding: 2rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--card-border);
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #a8aaff, #e8a2ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        main {
+            padding: 3rem 5%;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .hero {
+            text-align: center;
+            margin-bottom: 4rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        .hero h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            font-weight: 800;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+            animation: fadeInUp 0.8s ease-out 0.2s both;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), 0 0 15px var(--primary-glow);
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+
+        .stat-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .accent-text {
+            color: var(--accent);
+        }
+
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.8rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 8px;
+            height: 24px;
+            background: var(--primary);
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .worker-lookup {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+            animation: fadeInUp 0.8s ease-out 0.4s both;
+        }
+
+        .search-box {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        button {
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            border: none;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .worker-results {
+            display: none;
+        }
+
+        .worker-results.active {
+            display: block;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .table-container {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            overflow: hidden;
+            animation: fadeInUp 0.8s ease-out 0.6s both;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 1.2rem;
+            text-align: left;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        th {
+            background: rgba(0, 0, 0, 0.2);
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .badge {
+            padding: 0.3rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .badge.mature { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .badge.pending { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+        .hash {
+            font-family: monospace;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Loading Spinner */
+        .loader {
+            display: none;
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background-color: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        
+        .format-ori {
+            color: #fff;
+            font-weight: 600;
+        }
+        .format-ori span {
+            color: var(--text-muted);
+            font-size: 0.8em;
+            font-weight: 400;
+        }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">ORI Pool</div>
+        <div class="connection-status" id="conn-status">
+            <div class="status-dot"></div>
+            Connecting...
+        </div>
+    </header>
+
+    <main>
+        <div class="hero">
+            <h1 id="pool-name">Loading...</h1>
+            <p>PPLNS Mining Pool for the ORI Blockchain. Highly optimized, low fee, and reliable payouts.</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="card">
+                <div class="stat-value" id="stat-height">--</div>
+                <div class="stat-label">Network Height</div>
+            </div>
+            <div class="card">
+                <div class="stat-value" id="stat-workers">--</div>
+                <div class="stat-label">Active Workers</div>
+            </div>
+            <div class="card">
+                <div class="stat-value" id="stat-blocks-24h">--</div>
+                <div class="stat-label">Blocks Found (24h)</div>
+            </div>
+            <div class="card">
+                <div class="stat-value" id="stat-shares-24h">--</div>
+                <div class="stat-label">Shares (24h)</div>
+            </div>
+            <div class="card">
+                <div class="stat-value accent-text" id="stat-fee">--%</div>
+                <div class="stat-label">Pool Fee</div>
+            </div>
+        </div>
+
+        <div class="worker-lookup">
+            <h2 class="section-title">Miner Statistics</h2>
+            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Enter your ORI wallet address to check your balances and mining statistics.</p>
+            
+            <div class="search-box">
+                <input type="text" id="worker-addr-input" placeholder="ori1q..." onkeypress="if(event.key === 'Enter') lookupWorker()">
+                <button onclick="lookupWorker()">
+                    <span id="btn-text">Search</span>
+                    <div class="loader" id="btn-loader"></div>
+                </button>
+            </div>
+
+            <div class="worker-results" id="worker-results">
+                <div class="stats-grid" style="margin-bottom: 0;">
+                    <div class="card" style="background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.3);">
+                        <div class="stat-value format-ori" id="w-earned">0.00 <span>ORI</span></div>
+                        <div class="stat-label">Total Paid</div>
+                    </div>
+                    <div class="card" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3);">
+                        <div class="stat-value format-ori" id="w-pending">0.00 <span>ORI</span></div>
+                        <div class="stat-label">Pending Balance</div>
+                    </div>
+                    <div class="card">
+                        <div class="stat-value" id="w-shares">0</div>
+                        <div class="stat-label">Total Shares</div>
+                    </div>
+                    <div class="card">
+                        <div class="stat-value" id="w-diff">0.00</div>
+                        <div class="stat-label">Worker Difficulty</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h2 class="section-title">Recently Found Blocks</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Height</th>
+                        <th>Block Hash</th>
+                        <th>Reward</th>
+                        <th>Finder</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody id="blocks-table-body">
+                    <tr><td colspan="5" style="text-align: center;">Loading blocks...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <script>
+        const formatORI = (sats) => (sats / 100000000).toFixed(2);
+        const formatTimeAgo = (ts) => {
+            const seconds = Math.floor(Date.now() / 1000 - ts);
+            if (seconds < 60) return seconds + 's ago';
+            if (seconds < 3600) return Math.floor(seconds/60) + 'm ago';
+            if (seconds < 86400) return Math.floor(seconds/3600) + 'h ago';
+            return Math.floor(seconds/86400) + 'd ago';
+        };
+        const formatHash = (hash) => {
+            if(!hash) return '';
+            return hash.substring(0, 10) + '...' + hash.substring(hash.length - 10);
+        };
+
+        async function fetchGlobalStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                
+                document.getElementById('pool-name').textContent = data.pool_name || data.pool || 'ORI Pool';
+                document.getElementById('stat-height').textContent = data.current_height || 0;
+                document.getElementById('stat-workers').textContent = data.active_workers || data.workers_24h || 0;
+                document.getElementById('stat-blocks-24h').textContent = data.blocks_24h || 0;
+                document.getElementById('stat-shares-24h').textContent = data.shares_24h || 0;
+                document.getElementById('stat-fee').textContent = (data.fee_pct || 1.0) + '%';
+                
+                document.getElementById('conn-status').innerHTML = '<div class="status-dot"></div> Live';
+            } catch (err) {
+                document.getElementById('conn-status').innerHTML = '<div class="status-dot" style="background: #ef4444; box-shadow: 0 0 10px #ef4444; animation:none;"></div> Disconnected';
+            }
+        }
+
+        async function fetchRecentBlocks() {
+            try {
+                const res = await fetch('/blocks?limit=10');
+                const data = await res.json();
+                const tbody = document.getElementById('blocks-table-body');
+                tbody.innerHTML = '';
+                
+                if(!data.blocks || data.blocks.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No blocks found yet. Keep mining!</td></tr>';
+                    return;
+                }
+
+                data.blocks.forEach(b => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="font-weight: 600; color: #fff;">${b.height}</td>
+                        <td class="hash" title="${b.block_hash}">${formatHash(b.block_hash)}</td>
+                        <td class="format-ori">${formatORI(b.reward_sats)} <span>ORI</span></td>
+                        <td class="hash" style="color: var(--primary);">${formatHash(b.finder_addr)}</td>
+                        <td>${formatTimeAgo(b.timestamp)}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function lookupWorker() {
+            const addr = document.getElementById('worker-addr-input').value.trim();
+            if(!addr) return;
+
+            const btnText = document.getElementById('btn-text');
+            const btnLoader = document.getElementById('btn-loader');
+            const results = document.getElementById('worker-results');
+
+            btnText.style.display = 'none';
+            btnLoader.style.display = 'inline-block';
+
+            try {
+                const res = await fetch(`/worker/${addr}`);
+                if (!res.ok) throw new Error('Worker not found');
+                const data = await res.json();
+
+                document.getElementById('w-earned').innerHTML = `${formatORI(data.earned_sats)} <span>ORI</span>`;
+                document.getElementById('w-pending').innerHTML = `${formatORI(data.pending_sats)} <span>ORI</span>`;
+                document.getElementById('w-shares').textContent = data.shares_total;
+                document.getElementById('w-diff').textContent = data.current_diff;
+
+                results.classList.add('active');
+            } catch (err) {
+                alert('Worker not found or no shares submitted yet.');
+                results.classList.remove('active');
+            } finally {
+                btnText.style.display = 'inline-block';
+                btnLoader.style.display = 'none';
+            }
+        }
+
+        // Init
+        fetchGlobalStats();
+        fetchRecentBlocks();
+        setInterval(fetchGlobalStats, 30000); // Refresh every 30s
+    </script>
+</body>
+</html>

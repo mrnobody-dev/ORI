@@ -19,6 +19,8 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -335,8 +337,15 @@ app.add_middleware(
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.get("/", summary="Pool info & statistics")
-def root():
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+@app.get("/", response_class=HTMLResponse, summary="Pool Dashboard")
+def dashboard():
+    with open(os.path.join(os.path.dirname(__file__), "static", "index.html"), "r") as f:
+        return f.read()
+
+@app.get("/api/stats", summary="Pool info & statistics")
+def api_stats():
     stats = _db.get_pool_stats_24h() if _db else {}
     job   = _jobs.get(_current_job_id, {})
     return {
