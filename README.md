@@ -10,12 +10,13 @@ Whether you just want to run the wallet, start a node, or mine some ORI, this gu
 
 | File | Description |
 |------|-------------|
-| [**ORICore-v0.2.1-windows-x64.zip**](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.1/ORICore-v0.2.1-windows-x64.zip) | Full node + GUI wallet + miner (all-in-one) |
+| [**ORICore-v0.2.2-windows-x64.zip**](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.2/ORICore-v0.2.2-windows-x64.zip) | Full node + GUI wallet + miner v1.1.0 (pool + solo) |
 
 **How to use:**
 1. Download and extract the ZIP
 2. Run `ORICore.exe` → full node + wallet GUI starts automatically
-3. Run `miner-ori.exe --address ori1<YOUR_ADDRESS>` to start mining
+3. Run `miner-ori.exe --address ori1<YOUR_ADDRESS>` for **solo mining**, or
+4. Run `miner-ori.exe --address ori1<YOUR_ADDRESS> --host POOL_HOST --port POOL_PORT --pool` for **pool mining**
 
 👉 **[All releases →](https://github.com/mrnobody-dev/ORI/releases)**
 
