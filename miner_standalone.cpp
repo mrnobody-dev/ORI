@@ -379,7 +379,8 @@ int main(int argc, char* argv[]) {
     if (hw_cores < 1) hw_cores = 1;
     int threads = hw_cores; // will be clamped after arg parsing
     std::string token = "";
-    bool pool_mode = false;  // --pool: connect to PPLNS pool instead of node directly
+    static const int64_t PPLNS_WINDOW_DEFAULT = 10000;
+bool pool_mode = false;  // --pool: connect to PPLNS pool instead of node directly
 
     bool https = false;
     for (int i = 1; i < argc; ++i) {
@@ -467,6 +468,9 @@ int main(int argc, char* argv[]) {
             std::string pool_target_hex   = json_extract_string(json_job, "pool_target");
             std::string node_target_hex   = json_extract_string(json_job, "node_target");
 
+            int64_t pplns_pts = json_extract_int64(json_job, "pplns_points");
+            if (pplns_pts <= 0) pplns_pts = PPLNS_WINDOW_DEFAULT;
+
             if (coinbase_address.empty() || pool_target_hex.empty()) {
                 std::cout << "[ERROR] Invalid pool job response. Retrying in 3s..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -512,8 +516,9 @@ int main(int argc, char* argv[]) {
             std::cout << C_BLUE << "[pool]" << C_RESET
                       << " job " << C_DIM << job_id << C_RESET
                       << " height " << C_CYAN << height << C_RESET
-                      << " diff " << C_YELLOW << std::fixed << std::setprecision(4) << pool_diff << C_RESET
-                      << " coinbase→" << C_DIM << coinbase_address.substr(0, 12) << "..." << C_RESET
+                      << " diff " << C_YELLOW << std::fixed << std::setprecision(6) << pool_diff << C_RESET
+                      << " target 0x" << C_DIM << pool_target_hex.substr(0, 12) << "... " << C_RESET
+                      << "coinbase->" << C_DIM << coinbase_address.substr(0, 12) << "..." << C_RESET
                       << std::endl;
 
             RoundState rs;
@@ -574,16 +579,39 @@ int main(int argc, char* argv[]) {
                                           submit_json, token, https);
             if (sub.status == 200) {
                 accepted_shares++;
-                // Parse new pool_diff from response for vardiff
                 bool is_block = (sub.body.find("\"is_block\":true") != std::string::npos);
-                std::cout << C_GREEN << "[pool ]" << C_RESET
-                          << " " << C_GREEN << (is_block ? "BLOCK FOUND!" : "share accepted") << C_RESET
-                          << " (" << accepted_shares << " shares)"
-                          << std::endl;
+                int64_t window_pts = json_extract_int64(sub.body, "window_points");
+                int64_t balance    = json_extract_int64(sub.body, "balance_sats");
+                int64_t shift      = json_extract_int64(sub.body, "shift");
+                std::string new_target = json_extract_string(sub.body, "pool_target");
+                if (is_block) {
+                    int64_t blk_height = json_extract_int64(sub.body, "height");
+                    int64_t reward     = json_extract_int64(sub.body, "reward_sats");
+                    std::cout << C_GREEN << "[BLOCK FOUND!]" << C_RESET
+                              << " height " << C_CYAN << blk_height << C_RESET
+                              << " reward " << C_YELLOW << reward << " sats" << C_RESET
+                              << " -> relayed to node" << std::endl;
+                    std::cout << C_GREEN << "[payout ]" << C_RESET << C_DIM
+                              << sub.body.substr(0, 300) << C_RESET << std::endl;
+                    accepted_blocks++;
+                } else {
+                    double new_diff = 0.0;
+                    if (new_target.size() >= 8) {
+                        std::vector<uint8_t> nt = hex_to_bytes(new_target);
+                        new_diff = target_to_difficulty(nt);
+                    }
+                    std::cout << C_GREEN << "[share+]" << C_RESET
+                              << " total " << C_GREEN << accepted_shares << C_RESET
+                              << " | window " << C_CYAN << window_pts << "/" << pplns_pts << C_RESET
+                              << " pts | balance " << C_YELLOW << balance << " sats" << C_RESET
+                              << " | vardiff-> " << C_DIM << std::fixed << std::setprecision(6)
+                              << new_diff << " (shift " << shift << ")" << C_RESET
+                              << std::endl;
+                }
             } else {
                 std::cout << C_RED << "[pool ]" << C_RESET
                           << " " << C_RED << "share rejected" << C_RESET
-                          << ": " << sub.body << std::endl;
+                          << ": " << sub.body.substr(0, 200) << std::endl;
             }
             continue;  // next round
         }

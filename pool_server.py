@@ -309,6 +309,7 @@ def pool_job(worker: str = Query(...)):
         "coinbase_address": POOL_ADDRESS,
         "pool_target": _target_hex(pool_target),
         "node_target": _target_hex(node_target),
+        "pplns_points": PPLNS_POINTS,
         "txs": tpl.get("txs", []),
     }
 
@@ -346,12 +347,26 @@ def pool_submit(body: SubmitReq):
     pool_target = node_target << shift
 
     is_block = int.from_bytes(h, "big") <= node_target
+    # live operator log for PPLNS activity
+    print(f"[share] worker={body.worker_addr[:16]}… "
+          f"hash=0x{h.hex()[:16]} window={len(LEDGER.window)} "
+          f"shift={shift} is_block={is_block}", flush=True)
     if not is_block:
         if int.from_bytes(h, "big") > pool_target:
             raise HTTPException(status_code=400, detail="above pool target (low difficulty share)")
         new_shift = LEDGER.add_share(body.worker_addr)
         wt = target_from_bits(int(tpl["bits"])) << new_shift
-        return {"accepted": True, "is_block": False, "pool_target": _target_hex(wt)}
+        with LEDGER.lock:
+            balance = LEDGER.balances.get(body.worker_addr, 0)
+        return {
+            "accepted": True,
+            "is_block": False,
+            "pool_target": _target_hex(wt),
+            "window_points": len(LEDGER.window),
+            "balance_sats": balance,
+            "shift": new_shift,
+            "worker_shares": LEDGER.workers.get(body.worker_addr, {}).get("shares", 0),
+        }
 
     # ── REAL BLOCK ── assemble & relay to the node ──
     with _submit_lock:
@@ -378,7 +393,10 @@ def pool_submit(body: SubmitReq):
             "accepted": True,
             "is_block": True,
             "height": int(tpl["height"]),
+            "reward_sats": int(tpl["reward_sats"]),
             "payout": payout,
+            "window_points": len(LEDGER.window),
+            "balance_sats": LEDGER.balances.get(body.worker_addr, 0),
             "pool_target": _target_hex(node_target << shift),
         }
 
