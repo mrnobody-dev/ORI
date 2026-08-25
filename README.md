@@ -57,13 +57,50 @@ python wallet.py balance alice --node http://127.0.0.1:8000
 python wallet.py send --node http://127.0.0.1:8000 --from alice --to <ADDRESS_ORI1> --amount 1000000 --tier 3
 ```
 
-### Mining
-You can mine ORI using the standalone miner process (connects to your running node):
+### ⛏️ Mining
+
+ORI provides two ways to mine: a **pre-compiled `.exe`** (Windows, fastest) and a **Python script** (cross-platform).
+
+#### Option A — Pre-compiled Miner (Windows, Recommended)
+
+Download and run `miner-ori.exe` directly — no Python or installation needed:
+
 ```bash
-python miner.py --node http://127.0.0.1:8000 --address <YOUR_ORI_ADDRESS> --threads 4
+# Basic usage — connect to a local node
+miner-ori.exe --address ori1<YOUR_ADDRESS> --host 127.0.0.1 --port 8000
+
+# Multi-threaded (recommended: use all CPU cores)
+miner-ori.exe --address ori1<YOUR_ADDRESS> --host 127.0.0.1 --port 8000 --threads 8
+
+# Connect to a remote/public node
+miner-ori.exe --address ori1<YOUR_ADDRESS> --host your-node.example.com --port 8000 --threads 4
+
+# With API token (if node has BTPY_API_TOKEN set)
+miner-ori.exe --address ori1<YOUR_ADDRESS> --host 127.0.0.1 --port 8000 --threads 4 --token YOUR_TOKEN
+```
+
+**Arguments:**
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--address` | ✅ Yes | — | Your ORI payout address (`ori1…`) |
+| `--host` | No | `127.0.0.1` | Node API host |
+| `--port` | No | `8000` | Node API port |
+| `--threads` | No | `1` | Number of CPU threads to use for mining |
+| `--token` | No | *(empty)* | API token (only needed if node requires `X-API-Key`) |
+
+> 💡 **Tip:** For maximum hashrate, set `--threads` to the number of physical CPU cores on your machine.
+
+#### Option B — Python Miner (Cross-platform)
+
+Requires the Python environment set up (see Quick Start):
+
+```bash
+python miner.py --node http://127.0.0.1:8000 --address ori1<YOUR_ADDRESS> --threads 4
 ```
 
 *(Optional) Quick Demo:* To test mining instantly on a fresh local network, lower the difficulty by setting `BTPY_INITIAL_ZEROS=2` before starting the node and miner.
+
 
 ---
 
