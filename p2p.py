@@ -250,6 +250,12 @@ class Peer(threading.Thread):
                 else:
                     self._add_ban_score("protocol_violation")
                 logger.warn(LogCategory.P2P, "Peer framing error", peer=_peer_label(self.addr), error=reason)
+                if reason == "bad magic":
+                    logger.warn(LogCategory.P2P,
+                                "Endpoint answered with non-P2P data — this "
+                                "looks like an HTTP/API port added as a peer. "
+                                "P2P and API ports are different.",
+                                peer=_peer_label(self.addr))
                 self.disconnect_reason = reason
                 break
             if msg is None:
@@ -333,6 +339,11 @@ class Peer(threading.Thread):
             self.send_addr()
         elif cmd == "verack":
             self.handshake_complete = True
+            # Successful handshake: this endpoint is a real P2P peer — clear
+            # any failure history so persistence pruning keeps it.
+            with self.network._lock:
+                self.network._connect_fails.pop(self.addr, None)
+                self.network._protocol_fails.pop(self.addr, None)
             self.network.node.on_peer_ready(self)
         elif cmd == "addr":
             data = json.loads(payload)
@@ -492,6 +503,13 @@ class Peer(threading.Thread):
             self.sock.close()
         except OSError:
             pass
+        # Count pre-handshake deaths as protocol failures (wrong target port,
+        # HTTP endpoint added as peer, service down). Drives persistence
+        # pruning so dead endpoints stop haunting peers.json forever.
+        if not self.handshake_complete and getattr(self, "addr", None):
+            with self.network._lock:
+                fails = self.network._protocol_fails.get(self.addr, 0) + 1
+                self.network._protocol_fails[self.addr] = fails
         if getattr(self, "link_established", False):
             duration_sec = max(0.0, now() - self.connected_at)
             reason = self.disconnect_reason or "closed"
@@ -542,6 +560,7 @@ class Network:
         # proxy (WinError 10061) is retried politely instead of hammered.
         self._connect_backoff = {}
         self._connect_fails = {}
+        self._protocol_fails = {}   # addr -> pre-handshake death count
     
     def _load_banned_peers(self):
         import os
@@ -743,10 +762,21 @@ class Network:
         import os
         try:
             with self._lock:
-                snapshot = list(self.known)
+                # Prune endpoints that repeatedly die before handshake (wrong
+                # port / API hosts) so they stop resurrecting on every boot.
+                snapshot = [
+                    (h, p) for (h, p) in self.known
+                    if self._connect_fails.get((h, p), 0)
+                    + self._protocol_fails.get((h, p), 0) < 5
+                ]
             with open(self.peers_file, "w") as f:
                 json.dump([{"host": h, "port": p} for h, p in snapshot], f)
-            logger.debug(LogCategory.P2P, "Saved known peers", count=len(snapshot), file=self.peers_file)
+            pruned = len(self.known) - len(snapshot)
+            if pruned > 0:
+                logger.info(LogCategory.P2P,
+                            "Saved known peers (pruned dead endpoints)",
+                            kept=len(snapshot), pruned=pruned,
+                            file=self.peers_file)
         except Exception:
             pass
 

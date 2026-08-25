@@ -532,6 +532,34 @@ def create_app(node, lifespan=None):
 
     @app.get("/mining/template", summary="Get block template for mining", tags=["Mining"])
     def mining_template(address: str, _: None = Depends(_check_api_token)):
+        # Stale-chain safety interlock: if ANY completed-handshake peer
+        # advertises a significantly higher height than our tip, we are
+        # almost certainly mining an isolated fork (e.g. fresh datadir /
+        # missing volume). Refuse to hand out templates instead of letting
+        # miners burn work on blocks the network will reject.
+        try:
+            my_height = node.storage.height()
+            max_peer = 0
+            for p in list(node.network.peers.values()):
+                if getattr(p, "handshake_complete", False):
+                    try:
+                        max_peer = max(max_peer, int(p.height or 0))
+                    except Exception:
+                        pass
+            if max_peer > 10 and my_height + 2 < max_peer:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"STALE CHAIN: local height {my_height} but best peer "
+                        f"{max_peer}. Sync first (check P2P seeds/volume) — "
+                        "refusing to hand out a template the network would "
+                        "reject."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         return node.mining_template(address)
 
     @app.post("/mining/submit", summary="Submit mined block", tags=["Mining"])
