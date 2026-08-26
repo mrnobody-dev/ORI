@@ -1,96 +1,83 @@
-# ORI Blockchain
+# ORI (We build but to tear down)
 
-Bitcoin-style blockchain: UTXO + Proof-of-Work (CPU SHA-256d), Bech32 `ori1...` addresses,
-GUI wallet, REST API, solo **and pool** mining.
+ORI is an experimental, decentralized, peer-to-peer Proof-of-Work cryptocurrency designed for high-speed transactions and long-term sustainability. Built purely in Python, it features a native GUI wallet, REST API, UTXO model, and both solo and PPLNS pool mining capabilities.
 
-## 🚀 Try It in 2 Minutes (Windows, no Python)
+*"We build but to tear down. Most of our work and resource is squandered - 2030"*
 
-1. Download & extract → [ORICore-v0.2.2-windows-x64.zip](https://github.com/mrnobody-dev/ORI/releases/download/v0.2.2/ORICore-v0.2.2-windows-x64.zip)
-   👉 [All releases](https://github.com/mrnobody-dev/ORI/releases)
-2. Run `ORICore.exe` — full node + GUI wallet starts and syncs automatically.
-3. Mine with the bundled miner:
+---
 
-```bat
-:: solo mining (to your own address, needs your local ORICore running)
-miner-ori.exe --address ori1YOUR_ADDRESS --threads 8
+## 📖 Specifications
 
-:: pool mining (PPLNS) — connect to the public ORI pool
-miner-ori.exe --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 2
-```
+| Parameter | Value |
+|-----------|-------|
+| **Consensus** | Proof-of-Work (PoW) |
+| **Algorithm** | SHA-256d (CPU Mining Friendly) |
+| **Block Time** | ~3.69 Seconds |
+| **Block Reward** | 6.12073980 ORI |
+| **Halving Interval**| 30,143,415 Blocks |
+| **Max Supply** | 368,999,999.79 ORI |
+| **Retargeting** | Every 23,414 Blocks (~1 Day) |
+| **Block Size** | 100 KB Max |
+| **Maturity** | 2,000 Blocks |
+| **Addresses** | Bech32 `ori1...` |
 
-Your first address is shown on first launch of `ORICore.exe` (also under
-**Receive** tab). Coins from mining mature after 100 blocks.
+---
 
-## 🐍 Run From Source (Windows / Linux / Mac)
+## 🚀 Quick Start (Windows)
+
+The easiest way to run the node and wallet without installing Python:
+
+1. Download the latest release from the [Releases Page](https://github.com/mrnobody-dev/ORI/releases).
+2. Extract the `.zip` file.
+3. Run `ORICore.exe` to start the GUI wallet. It will automatically start a full node in the background and sync with the network.
+
+## 🐍 Build from Source (Linux / Mac / Windows)
+
+Requires Python 3.10+.
 
 ```bash
 git clone https://github.com/mrnobody-dev/ORI.git
 cd ORI
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-source .venv/bin/activate
 
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install requirements
 pip install -r requirements.txt
 
-# GUI wallet + node (recommended)
+# Run the GUI Wallet & Full Node
 python qt_app.py
 ```
 
-That's it — the GUI embeds a full node, wallet, and REST API (`http://127.0.0.1:8000/docs`).
+*The GUI embeds a full node, wallet, and REST API (`http://127.0.0.1:8000/docs`).*
 
-## ⛏️ Mining From Source
+---
 
-Start the node first (`python qt_app.py` or headless below), then:
+## ⛏️ Mining
 
+You can mine ORI either solo or via a PPLNS mining pool. Start your node (`python qt_app.py`), then use the bundled miner.
+
+**Solo Mining:**
 ```bash
-# get an address
-python wallet.py new --name miner1
-python wallet.py list
-
-# solo mining against your local node
-python miner.py --address ori1YOUR_ADDRESS --threads 6
-
-# remote mining against any public node (token required if set by operator)
-python miner.py --node https://your-node.example.com --address ori1YOUR_ADDRESS --api-token TOKEN
+python miner.py --address ori1YOUR_ADDRESS --threads 4
 ```
 
-## 🌐 Host a Node or PPLNS Pool (Railway / VPS / Docker)
-
-Deploy a public node or a mining pool server in minutes:
-
-👉 **[RAILWAY.md — step-by-step deployment guide](RAILWAY.md)**
-
-Includes: node hosting, PPLNS pool hosting (`pool_server.py`), TCP proxy setup,
-env vars, and how to point miners at your deployment.
-
-## 💸 Sending Transactions
-
+**Pool Mining (PPLNS):**
 ```bash
-python wallet.py send --from miner1 --to ori1RECIPIENT --amount 1.5 --tier 3
+python miner.py --address ori1YOUR_ADDRESS --host pool.ori-network.com --port 443 --https --pool --threads 4
 ```
 
-| Tier | Confirms in | Fee |
-|------|-------------|-----|
-| 5 | ~5 blocks | 0.28 sat/vB |
-| 3 | ~3 blocks | 0.46 sat/vB |
-| 1 | ~1 block | 1.4 sat/vB |
+---
 
-## 📖 Specs
+## 🌐 Network & Infrastructure
 
-| | |
-|---|---|
-| Consensus | PoW, SHA-256d (CPU friendly) |
-| Difficulty | ORI-Shield retarget every 60 blocks |
-| Block time | ~60 s |
-| Reward | 46.28 ORI, halving every 2,102,400 blocks |
-| Max supply | 194.6 million ORI |
-| Addresses | Bech32 `ori1...` |
-| Maturity | Coinbase spends after 100 blocks |
+To run a headless node on a VPS, Railway, or Docker, or to host your own PPLNS Mining Pool, please read the deployment guide:
 
-More technical detail: [build.md](build.md) · Security audit: [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md)
+👉 **[Deployment & Hosting Guide (RAILWAY.md)](RAILWAY.md)**
+
+For deeper technical documentation and architecture, read the [Build Guide](build.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 ORI
+Released under the [MIT License](LICENSE) © 2026 ORI.
