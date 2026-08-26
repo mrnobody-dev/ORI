@@ -131,6 +131,18 @@ dist-release/
 # local config / internal docs (not for public repo)
 config.json
 
+# dev/scratch files (not for public repo)
+allinone.py
+audit_report.md
+report.md
+setup_miner.py
+verify_imports.py
+miner_kernel.cpp
+miner_standalone.cpp
+tests/test_allinone.py
+qt/build.md
+ORICore.spec
+
 # Spyder project settings
 .spyderproject
 .spyproject

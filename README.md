@@ -27,22 +27,22 @@ ORI is an experimental, decentralized, peer-to-peer Proof-of-Work cryptocurrency
 
 1. Download the latest release from the [Releases Page](https://github.com/mrnobody-dev/ORI/releases).
 2. Extract the `.zip` file.
-3. Run `ORICore.exe` to launch the GUI wallet. It automatically starts a full node and syncs with the network.
+3. Run `ORINode.exe` to launch the GUI wallet. It automatically starts a full node and syncs with the network.
 
 ---
 
 ## 🖥️ Running a Headless Node (CLI)
 
-For VPS or server environments where no GUI is needed, run `ORICore.exe` directly from Command Prompt with flags:
+For VPS or server environments where no GUI is needed, run `ORINode.exe` directly from Command Prompt with flags:
 
 **Basic node (connect to official seed):**
 ```cmd
-ORICore.exe -datadir=data\node1 -port=8000 -p2pport=8033
+ORINode.exe -datadir=data\node1 -port=8000 -p2pport=8033
 ```
 
 **Custom peers (manual P2P connection):**
 ```cmd
-ORICore.exe -datadir=data\node1 -port=8000 -p2pport=8034 -seed-peers=sakura.proxy.rlwy.net:24044
+ORINode.exe -datadir=data\node1 -port=8000 -p2pport=8034 -seed-peers=sakura.proxy.rlwy.net:24044
 ```
 
 **Linux/Mac (from source, using the `orid` daemon script):**
@@ -75,7 +75,7 @@ ORI is CPU-friendly (SHA-256d). You can mine solo or join the PPLNS pool.
 
 ### Option 2 — `miner-ori.exe` (Windows CLI)
 
-**Solo mining** (requires `ORICore.exe` running locally on port 8000):
+**Solo mining** (requires `ORINode.exe` running locally on port 8000):
 ```cmd
 miner-ori.exe --address ori1YOUR_ADDRESS --threads 4
 ```
