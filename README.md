@@ -1,6 +1,6 @@
 # ORI (We build but to tear down)
 
-ORI is an experimental, decentralized, peer-to-peer Proof-of-Work cryptocurrency designed for high-speed transactions and long-term sustainability. Built purely in Python, it features a native GUI wallet, REST API, UTXO model, and both solo and PPLNS pool mining capabilities.
+ORI is an experimental, decentralized, peer-to-peer Proof-of-Work cryptocurrency designed for high-speed transactions and long-term sustainability. It features a native GUI wallet, REST API, UTXO model, and both solo and PPLNS pool mining capabilities.
 
 *"We build but to tear down. Most of our work and resource is squandered - 2030"*
 
@@ -23,103 +23,106 @@ ORI is an experimental, decentralized, peer-to-peer Proof-of-Work cryptocurrency
 
 ---
 
-## 🚀 Quick Start (Windows)
-
-The easiest way to run the node and wallet without installing Python:
+## 🚀 Quick Start — Windows (GUI)
 
 1. Download the latest release from the [Releases Page](https://github.com/mrnobody-dev/ORI/releases).
 2. Extract the `.zip` file.
-3. Run `ORICore.exe` to start the GUI wallet. It will automatically start a full node in the background and sync with the network.
-
-## 🐍 Build from Source (Linux / Mac / Windows)
-
-Requires Python 3.10+.
-
-```bash
-git clone https://github.com/mrnobody-dev/ORI.git
-cd ORI
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install requirements
-pip install -r requirements.txt
-
-# Run the GUI Wallet & Full Node
-python qt_app.py
-```
-
-*The GUI embeds a full node, wallet, and REST API (`http://127.0.0.1:8000/docs`).*
+3. Run `ORICore.exe` to launch the GUI wallet. It automatically starts a full node and syncs with the network.
 
 ---
 
-## ⛏️ Mining Tutorial
+## 🖥️ Running a Headless Node (CLI)
 
-ORI is highly optimized for CPU mining (SHA-256d). You can mine **Solo** (directly to your own node) or connect to a **PPLNS Pool** (mining with others to share rewards).
+For VPS or server environments where no GUI is needed, run `ORICore.exe` directly from Command Prompt with flags:
 
-### Option 1: Mining on Windows (Easy Mode GUI/Batch)
-If you downloaded the Windows `.zip` release, you already have everything you need!
-1. Open the folder where you extracted ORI.
-2. Double-click the file named `CPU miner launcher.bat`.
-3. Paste your ORI wallet address and choose how many CPU threads to use.
-4. The miner will automatically connect to the Official Pool and start hashing!
+**Basic node (connect to official seed):**
+```cmd
+ORICore.exe -datadir=data\node1 -port=8000 -p2pport=8033
+```
 
-### Option 2: CLI Mining with `miner-ori.exe` (Windows)
-If you prefer using the Command Prompt (cmd) or PowerShell directly using the compiled executable, use the following commands:
+**Custom peers (manual P2P connection):**
+```cmd
+ORICore.exe -datadir=data\node1 -port=8000 -p2pport=8034 -seed-peers=sakura.proxy.rlwy.net:24044
+```
 
-**Solo Mining (Requires `ORICore.exe` running locally):**
+**Linux/Mac (from source, using the `orid` daemon script):**
+```bash
+./orid -datadir=data/node1 -port=8000 -p2pport=8033 -seed-peers=sakura.proxy.rlwy.net:24044
+```
+
+**Available flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-datadir` | Directory to store blockchain data |
+| `-port` | REST API port (default: `8000`) |
+| `-p2pport` | P2P network port (default: `8033`) |
+| `-api-host` | API bind address (default: `127.0.0.1`) |
+| `-seed-peers` | Comma-separated list of peers `host:port` |
+| `-initial-zeros` | PoW difficulty initial zeros |
+
+---
+
+## ⛏️ Mining
+
+ORI is CPU-friendly (SHA-256d). You can mine solo or join the PPLNS pool.
+
+### Option 1 — Batch Launcher (Windows, Easiest)
+1. Extract the `.zip` release.
+2. Double-click `CPU miner launcher.bat`.
+3. Enter your `ori1...` wallet address and number of threads.
+4. The miner connects to the official pool automatically.
+
+### Option 2 — `miner-ori.exe` (Windows CLI)
+
+**Solo mining** (requires `ORICore.exe` running locally on port 8000):
 ```cmd
 miner-ori.exe --address ori1YOUR_ADDRESS --threads 4
 ```
 
-**Pool Mining (PPLNS):**
+**Pool mining (PPLNS):**
 ```cmd
 miner-ori.exe --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 4
 ```
 
-### Option 3: Mining from Source Code (Python)
-If you are running from source code on Linux/Mac/Windows, start your local node first (`python qt_app.py`), then open a new terminal:
+### Option 3 — Python source (Linux/Mac/Windows)
 
-**Solo Mining:**
+**Solo mining:**
 ```bash
 python miner.py --address ori1YOUR_ADDRESS --threads 4
 ```
 
-**Pool Mining:**
+**Pool mining:**
 ```bash
 python miner.py --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 4
 ```
 
 ---
 
-## 🔗 Connecting Nodes (P2P Network)
+## 🔗 Connecting Nodes (P2P)
 
-By default, an ORI node attempts to connect to the hardcoded DNS seed to find other peers. However, if you are setting up a private network or want to manually connect to a specific node, you can do so using the `config.json` file.
+To connect manually to a specific node, either pass `-seed-peers` on launch or create a `config.json` in the same directory as the executable:
 
-1. In the same directory as your `ORICore.exe` or source code, create a file named `config.json`.
-2. Add the `seed_peers` array pointing to the IP addresses or domains of the target nodes.
-
-**Example `config.json`:**
 ```json
 {
   "seed_peers": [
-    "ori-production-8364.up.railway.app",
+    "sakura.proxy.rlwy.net:24044",
     "192.168.1.100"
   ]
 }
 ```
-3. Restart your node. It will now force a P2P connection to the specified peers on port `8033`.
+
+Restart the node after editing. It will connect to the listed peers on startup.
 
 ---
 
-## 🌐 Network & Infrastructure
+## 🌐 Hosting & Deployment
 
-To run a headless node on a VPS, Railway, or Docker, or to host your own PPLNS Mining Pool, please read the deployment guide:
+To run a node on Railway, VPS, or Docker, or to host your own PPLNS Mining Pool, see the deployment guide:
 
 👉 **[Deployment & Hosting Guide (RAILWAY.md)](RAILWAY.md)**
 
-For deeper technical documentation and architecture, read the [Build Guide](build.md).
+For architecture and technical documentation, see the [Build Guide](build.md).
 
 ## License
 
