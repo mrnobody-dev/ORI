@@ -55,7 +55,7 @@ class Config:
     max_mempool_txs: int = 100_000
     max_side_branch_blocks: int = 512
     low_s_activation_height: int = 53
-    network_magic: bytes = b"\x4f\x52\x49\x4d"
+    network_magic: bytes = b"\x4f\x52\x49\x31"
     max_money_sats: int = 36_899_999_979_683_400
     seed_dns_host: str = "0.0.0.0"
     seed_dns_port: int = 5353
