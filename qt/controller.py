@@ -954,17 +954,106 @@ class NodeController(QObject):
         _, info = self.default_account()
         if not info:
             raise WalletError("no default account")
-        ok, reason, new_txid = self.node.bump_fee(old_txid, info, new_tier, self.cfg)
+        
+        # 1. Get original payee, amount, and label from history
+        hist = self.meta.get("history", [])
+        old_rec = None
+        for rec in hist:
+            if rec.get("txid") == old_txid:
+                old_rec = rec
+                break
+        if not old_rec:
+            raise WalletError("Transaction not found in wallet history")
+        if not old_rec.get("mempool"):
+            raise WalletError("Transaction is already confirmed")
+            
+        to_addr = old_rec["address"]
+        fee_sats = old_rec.get("fee_sats", 0)
+        # amount_sats is negative and includes fee if it's a send.
+        # send_amount = abs(amount) - fee.
+        send_amount_sats = abs(old_rec["amount_sats"]) - fee_sats
+        amount_ori = send_amount_sats / COIN
+        label = old_rec.get("label", "")
+        
+        # 2. Get old tx inputs from mempool
+        base = self.cfg.api_url() if hasattr(self.cfg, 'api_url') else "http://127.0.0.1:8000"
+        mempool_data = self.node.mempool.get(bytes.fromhex(old_txid))
+        if not mempool_data:
+            raise WalletError("Old transaction not found in mempool")
+            
+        utxo_sel = set()
+        for txin in mempool_data.inputs:
+            utxo_sel.add((txin.prev_txid.hex(), txin.prev_vout))
+            
+        # 3. Create replacement using estimate_send but exclude old_txid from mempool spent list
+        from_addr = info["address"]
+        # Fetch confirmed UTXOs from chain via Node directly to avoid HTTP if we can, or just use chain.
+        # Actually, self.node.chain.utxo is accessible!
+        confirmed_utxos = []
+        for (txid, vout), out in self.node.chain.utxo._utxo.items():
+            try:
+                addr = out.script_pubkey.decode("ascii")
+                if addr == from_addr:
+                    confirmed_utxos.append({
+                        "txid": txid.hex(),
+                        "vout": vout,
+                        "value": out.value,
+                        "mature": True,
+                    })
+            except Exception:
+                pass
+                
+        # Simulate apply_mempool_utxos but EXCLUDE old_txid
+        spent_in_mempool = set()
+        for mem_txid, mem_tx in self.node.mempool._txs.items():
+            if mem_txid.hex() == old_txid:
+                continue # don't mark its inputs as spent
+            for txin in mem_tx.inputs:
+                if txin.prev_txid != b"\x00" * 32:
+                    spent_in_mempool.add((txin.prev_txid.hex(), txin.prev_vout))
+                    
+        available_utxos = [u for u in confirmed_utxos if (u["txid"], u["vout"]) not in spent_in_mempool]
+        
+        # Select the ones we need
+        by_key = {(u["txid"], u["vout"]): u for u in available_utxos}
+        selected_utxos = [by_key[k] for k in utxo_sel if k in by_key]
+        if not selected_utxos:
+            raise WalletError("Original inputs are no longer available")
+            
+        plan = plan_send(
+            selected_utxos, to_addr, from_addr, send_amount_sats, new_tier, self.cfg, subtract_fee=False
+        )
+        plan["from_address"] = from_addr
+        plan["rbf"] = True
+        
+        tx = sign_planned_wallet(self.wallet, plan)
+        ok, reason, new_txid = self.node.submit_raw_tx(tx.to_hex())
         if not ok:
             raise WalletError(reason)
-        # Update history: mark old as replaced, add new
-        hist = self.meta.get("history", [])
+            
+        # Update history
         for rec in hist:
             if rec.get("txid") == old_txid:
                 rec["replaced"] = True
                 rec["mempool"] = False
                 break
+                
+        rec_new = {
+            "txid": new_txid,
+            "type": "send",
+            "amount_sats": -plan["send_amount"] - plan["fee"],
+            "fee_sats": plan["fee"],
+            "address": to_addr,
+            "from_address": plan["from_address"],
+            "label": label,
+            "height": -1,
+            "timestamp": int(time.time()),
+            "mempool": True,
+            "confirmations": 0,
+        }
+        hist.insert(0, rec_new)
         self.meta["history"] = hist
+        self.meta["fee_tier"] = new_tier
         self._save_meta()
         return {"old_txid": old_txid, "new_txid": new_txid, "tier": new_tier}
 

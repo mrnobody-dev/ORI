@@ -26,6 +26,12 @@ hiddenimports = [
     'qrcode',
     'qrcode.image.pil',
     'PIL',
+    'Crypto',
+    'Crypto.Cipher',
+    'Crypto.Protocol',
+    'Crypto.Protocol.KDF',
+    'Crypto.Hash',
+    'Crypto.Random',
 ] + collect_submodules('qt')
 
 
