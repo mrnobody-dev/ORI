@@ -70,7 +70,8 @@ def adjust_bits(bits: int, actual_span: int, expected_span: int, max_target: int
     return bits_from_target(target)
 
 
-def ori_shield_next_bits(rows: list, target_span: int, max_target: int = MAX_TARGET) -> int:
+def ori_shield_next_bits(rows: list, target_span: float, max_target: int = MAX_TARGET) -> int:
+    target_span = int(target_span)
     ts = [r["timestamp"] for r in rows]
     if len(ts) < 6:
         return rows[-1]["bits"]
@@ -91,7 +92,7 @@ def ori_shield_next_bits(rows: list, target_span: int, max_target: int = MAX_TAR
 
 
 def ori_retarget_next_bits(
-    rows: list, block_time_seconds: int, max_target: int = MAX_TARGET
+    rows: list, block_time_seconds: float, max_target: int = MAX_TARGET
 ) -> int:
     """Difficulty retarget every RETARGET_INTERVAL (60) blocks.
 
@@ -110,13 +111,13 @@ def ori_retarget_next_bits(
     start = first5[len(first5) // 2]
     end = last5[len(last5) // 2]
     actual = max(1, end - start)
-    expected = max(1, span * block_time_seconds)
+    expected = max(1, int(span * block_time_seconds))
     if actual > expected * 4:
         actual = expected * 4
     if actual < expected // 4:
         actual = max(expected // 4, 1)
     target = target_from_bits(window[-1]["bits"])
-    target = (target * actual) // expected
+    target = int((target * actual) // expected)
     if target > max_target:
         target = max_target
     if target < MIN_TARGET:

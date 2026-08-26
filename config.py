@@ -28,17 +28,17 @@ class Config:
     coin_name: str = "ORI"
     network_hrp: str = "ori"
     initial_zeros: int = 2
-    block_time_seconds: int = 60
+    block_time_seconds: float = 3.69
     shield_window: int = 11
-    retarget_interval: int = 60
-    block_reward_sats: int = 4_628_000_000
-    halving_interval: int = 2_102_400
-    max_block_bytes: int = 1_000_000
+    retarget_interval: int = 23414
+    block_reward_sats: int = 612_073_980
+    halving_interval: int = 30_143_415
+    max_block_bytes: int = 100_000
     max_future_clock_seconds: int = 60
     time_tolerance_seconds: int = 70
-    coinbase_maturity: int = 100
+    coinbase_maturity: int = 2000
     coinbase_maturity_activation_height: int = 0
-    coinbase_note: str = "ORI genesis 2026-08-17 blocktime=60s"
+    coinbase_note: str = "We build but to tear down. Most of our work and resource is squandered - 2030"
     max_peers: int = 32
     max_msg_bytes: int = 4_000_000
     p2p_msg_token_refill_rate: float = 10.0
@@ -55,8 +55,8 @@ class Config:
     max_mempool_txs: int = 100_000
     max_side_branch_blocks: int = 512
     low_s_activation_height: int = 53
-    network_magic: bytes = b"\x4f\x52\x49\x31"
-    max_money_sats: int = 19_460_000_000_000_000
+    network_magic: bytes = b"\x4f\x52\x49\x4d"
+    max_money_sats: int = 36_899_999_979_683_400
     seed_dns_host: str = "0.0.0.0"
     seed_dns_port: int = 5353
     seed_dns_name: str = "seed.ori"
