@@ -65,6 +65,78 @@ MAX_SHIFT = int(os.environ.get("POOL_MAX_SHIFT", "24"))         # easiest
 SHARE_FAST_SEC = float(os.environ.get("SHARE_FAST_SEC", "5"))   # harder if faster
 SHARE_SLOW_SEC = float(os.environ.get("SHARE_SLOW_SEC", "45"))  # easier if slower
 POOL_DATA_DIR = os.environ.get("POOL_DATA_DIR", "pool_data")
+POOL_GIST_TOKEN = os.environ.get("POOL_GIST_TOKEN", "")
+
+
+class GistLedgerSync:
+    """Zero-config cloud persistence using a private GitHub Gist."""
+    GIST_DESC = "ORI Pool Ledger State"
+    FILE_NAME = "ledger.json"
+    
+    @staticmethod
+    def _headers():
+        return {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {POOL_GIST_TOKEN}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        
+    @classmethod
+    def _get_gist_id(cls):
+        req = urllib.request.Request("https://api.github.com/gists", headers=cls._headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                gists = json.loads(resp.read().decode())
+                for g in gists:
+                    if g.get("description") == cls.GIST_DESC:
+                        return g["id"]
+        except Exception as e:
+            print(f"[GIST] Error listing gists: {e}", flush=True)
+        return None
+
+    @classmethod
+    def download(cls) -> dict | None:
+        if not POOL_GIST_TOKEN:
+            return None
+        gid = cls._get_gist_id()
+        if not gid:
+            return None
+        req = urllib.request.Request(f"https://api.github.com/gists/{gid}", headers=cls._headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                gist = json.loads(resp.read().decode())
+                content = gist.get("files", {}).get(cls.FILE_NAME, {}).get("content")
+                if content:
+                    return json.loads(content)
+        except Exception as e:
+            print(f"[GIST] Download error: {e}", flush=True)
+        return None
+
+    @classmethod
+    def upload(cls, data: dict):
+        if not POOL_GIST_TOKEN:
+            return
+        
+        def _run():
+            gid = cls._get_gist_id()
+            payload = {
+                "description": cls.GIST_DESC,
+                "public": False,
+                "files": {cls.FILE_NAME: {"content": json.dumps(data, separators=(',', ':'))}}
+            }
+            try:
+                if gid:
+                    req = urllib.request.Request(f"https://api.github.com/gists/{gid}", headers=cls._headers(), data=json.dumps(payload).encode(), method="PATCH")
+                else:
+                    req = urllib.request.Request("https://api.github.com/gists", headers=cls._headers(), data=json.dumps(payload).encode(), method="POST")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    print(f"[GIST] Cloud Sync Successful (Length: {len(json.dumps(payload))} bytes)", flush=True)
+            except Exception as e:
+                print(f"[GIST] Upload error: {e}", flush=True)
+                
+        threading.Thread(target=_run, daemon=True).start()
+
+
 
 
 def _req(method: str, path: str, body: dict | None = None, timeout: int = 20):
@@ -216,6 +288,23 @@ class Ledger:
                 print(f"[pool] LEDGER {path} unreadable ({exc}) — "
                       f"trying backup...", flush=True)
         self._primary_valid = False
+        print("[pool] local files missing/corrupt, trying Cloud Gist Sync...", flush=True)
+        
+        gist_data = GistLedgerSync.download()
+        if gist_data:
+            try:
+                self._apply(gist_data)
+                self.saved_at = time.time()
+                self._primary_valid = True # write it back to disk on next save
+                print(f"[pool] LEDGER RECOVERED FROM GIST CLOUD: "
+                      f"balances={len(self.balances)} "
+                      f"window={len(self.window)} blocks={self.total_blocks}", flush=True)
+                # immediately save to disk
+                self.save()
+                return
+            except Exception as e:
+                print(f"[pool] Gist data corrupt: {e}", flush=True)
+
         print("[pool] starting with EMPTY ledger (no valid snapshot found)",
               flush=True)
         # One-shot recovery hook: seed balances when starting from zero.
@@ -268,6 +357,10 @@ class Ledger:
             self._primary_valid = True
             self.saved_at = time.time()
             self._saves_done += 1
+            
+            # Sync to cloud Gist every 5 local saves to avoid API rate limits
+            if self._saves_done % 5 == 0:
+                GistLedgerSync.upload(snapshot)
             # Periodic visible proof-of-persistence in deploy logs.
             if self._saves_done % 10 == 1 or self._saves_done == 1:
                 print(f"[pool] ledger SAVED #{self._saves_done}: "
