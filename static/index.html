@@ -4,106 +4,197 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ORI Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{
-  --accent:#43A047; --accent-dark:#2E7D32; --accent-light:#E8F5E9; --accent-lighter:#F1F8E9;
-  --bg:#FAFAF8; --panel:#FFFFFF; --border:#E0E0E0; --text:#212121; --muted:#757575;
-  --link:#2E7D32; --green:#2E7D32; --red:#C62828; --pending:#F9A825;
+:root {
+  --accent: #10B981; --accent-dark: #059669; --accent-light: rgba(16, 185, 129, 0.15); --accent-lighter: rgba(16, 185, 129, 0.05);
+  --bg: #F8FAFC; --panel: rgba(255, 255, 255, 0.85); --border: rgba(148, 163, 184, 0.2); 
+  --text: #0F172A; --muted: #64748B;
+  --link: #059669; --green: #059669; --red: #E11D48; --pending: #D97706;
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --header-bg: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  --header-text: #F8FAFC;
 }
-body.dark{
-  --accent:#66BB6A; --accent-dark:#A5D6A7; --accent-light:#153D1D; --accent-lighter:#102B16;
-  --bg:#07130A; --panel:#0D1F11; --border:#1F3D25; --text:#DFF5E3; --muted:#9AB3A0;
-  --link:#A5D6A7; --green:#81C784; --red:#EF9A9A; --pending:#FFD54F;
+body.dark {
+  --accent: #34D399; --accent-dark: #10B981; --accent-light: rgba(52, 211, 153, 0.15); --accent-lighter: rgba(52, 211, 153, 0.05);
+  --bg: #0B0F19; --panel: rgba(17, 24, 39, 0.7); --border: rgba(51, 65, 85, 0.5); 
+  --text: #F8FAFC; --muted: #94A3B8;
+  --link: #34D399; --green: #10B981; --red: #FB7185; --pending: #FBBF24;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  --header-bg: linear-gradient(135deg, #020617 0%, #0f172a 100%);
+  --header-text: #F8FAFC;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-a{color:var(--link);text-decoration:none}
-a:hover{text-decoration:underline}
-.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
-.muted{color:var(--muted)}
-.right{text-align:right}
-header{background:linear-gradient(135deg,#2E7D32,#66BB6A);color:#fff;padding:10px 20px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.2)}
-.logo{font-weight:800;font-size:18px;letter-spacing:.5px}
-.logo b{color:#DCEDC8}
-nav{display:flex;gap:4px}
-nav a{color:#E8F5E9;padding:6px 12px;border-radius:6px;font-weight:600;text-decoration:none}
-nav a:hover{background:rgba(255,255,255,.15)}
-nav a.active{background:rgba(255,255,255,.25)}
-#qwrap{margin-left:auto;display:flex;gap:8px;align-items:center}
-#q{width:280px;padding:8px 12px;border:none;border-radius:8px;font-size:13px;outline:none}
-#banner{display:none;background:#FDECEA;color:#C62828;padding:10px 20px;border-bottom:1px solid #F5C6CB;font-weight:600}
-main{padding:20px;max-width:1100px;margin:0 auto}
-h2{font-size:15px;margin:22px 0 10px;color:var(--accent-dark)}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.card .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
-.card .v{font-size:22px;font-weight:700;margin:4px 0;color:var(--accent-dark)}
-.card .s{font-size:11px;color:var(--muted);word-break:break-all}
-.bar{height:6px;background:var(--accent-lighter);border-radius:3px;margin-top:8px;overflow:hidden}
-.bar i{display:block;height:100%;background:var(--accent)}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-th{background:var(--accent-light);color:var(--accent-dark);text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:9px 12px}
-td{padding:8px 12px;border-top:1px solid var(--border);vertical-align:top}
-tr:hover td{background:var(--accent-lighter)}
-.chips{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.chip{background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:12px;color:var(--muted)}
-.chip b{color:var(--accent-dark)}
-.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
-.badge-yes{background:var(--accent-light);color:var(--accent-dark)}
-.badge-no{background:#EEEEEE;color:var(--muted)}
-.badge-green{background:var(--accent-light);color:var(--accent-dark)}
-.badge-red{background:#FDECEA;color:var(--red)}
-.badge-pending{background:#FFF8E1;color:var(--pending)}
-.detail{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.detail .row{display:flex;padding:9px 14px;border-top:1px solid var(--border)}
-.detail .row:first-child{border-top:none}
-.detail .k{width:150px;min-width:150px;color:var(--muted);font-size:12px}
-.detail .v{flex:1;word-break:break-all}
-.raw{background:#0B1F0A;color:#A5D6A7;padding:12px;border-radius:8px;font-family:ui-monospace,Consolas,monospace;font-size:11px;word-break:break-all;white-space:pre-wrap;margin-top:10px}
-.pager{display:flex;justify-content:space-between;margin-top:14px}
-.pager button{background:var(--accent);color:#fff;border:none;padding:8px 18px;border-radius:8px;font-weight:600;cursor:pointer}
-.pager button:disabled{background:#BDBDBD;cursor:default}
-.pager span{color:var(--muted);align-self:center;font-size:12px}
-footer{color:var(--muted);font-size:12px;text-align:center;padding:24px}
-footer a{color:var(--accent-dark)}
-.hl{background:#FFF9C4}
-.tx-in{color:var(--green);font-weight:600}.tx-out{color:var(--red);font-weight:600}.tx-pending{color:var(--pending);font-weight:600}
-.more-btn,.theme-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-weight:700;cursor:pointer}
-body.dark .raw{background:#020B04;color:#A5D6A7}
-@media(max-width:700px){#q{width:150px}.detail .k{width:110px;min-width:110px}}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { 
+  font-family: 'Outfit', -apple-system, sans-serif; 
+  background: var(--bg); color: var(--text); font-size: 14.5px;
+  min-height: 100vh; display: flex; flex-direction: column;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+a { color: var(--link); text-decoration: none; transition: color 0.2s, opacity 0.2s; }
+a:hover { opacity: 0.8; text-decoration: underline; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: -0.3px; }
+.muted { color: var(--muted); font-weight: 400; }
+.right { text-align: right; }
+
+header { 
+  background: var(--header-bg); color: var(--header-text); 
+  padding: 16px 32px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; 
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: sticky; top: 0; z-index: 100;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.logo { font-weight: 800; font-size: 22px; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
+.logo b { color: var(--accent); font-weight: 300; }
+.logo span { background: var(--accent); color: #000; font-size: 10px; padding: 2px 6px; border-radius: 6px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; transform: translateY(-2px); }
+
+nav { display: flex; gap: 8px; }
+nav a { 
+  color: var(--muted); padding: 8px 16px; border-radius: 8px; font-weight: 600; text-decoration: none;
+  transition: all 0.2s ease;
+}
+nav a:hover { background: rgba(255,255,255,0.05); color: #fff; }
+nav a.active { background: var(--accent-light); color: var(--accent); }
+
+#qwrap { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+#q { 
+  width: 320px; padding: 10px 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; 
+  font-size: 14px; outline: none; background: rgba(0,0,0,0.2); color: #fff;
+  font-family: 'Outfit', sans-serif; transition: all 0.3s;
+}
+#q:focus { background: rgba(0,0,0,0.4); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
+#q::placeholder { color: rgba(255,255,255,0.4); }
+
+#banner { display: none; background: rgba(225, 29, 72, 0.1); color: var(--red); padding: 12px 20px; border-left: 4px solid var(--red); font-weight: 600; margin: 20px auto; max-width: 1200px; border-radius: 0 8px 8px 0; backdrop-filter: blur(8px); }
+
+main { padding: 32px 24px; max-width: 1200px; margin: 0 auto; flex: 1; width: 100%; }
+
+h2 { font-size: 18px; font-weight: 700; margin: 32px 0 16px; color: var(--text); display: flex; align-items: center; gap: 12px; }
+h2::before { content: ''; display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 24px; }
+.card { 
+  background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px; 
+  box-shadow: var(--shadow); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s;
+}
+.card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px -10px rgba(16, 185, 129, 0.15); border-color: var(--accent-light); }
+.card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 8px; }
+.card .v { font-size: 28px; font-weight: 700; color: var(--text); line-height: 1.2; letter-spacing: -0.5px; }
+.card .s { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+.bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 12px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-dark), var(--accent)); border-radius: 3px; }
+
+table { 
+  width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); 
+  border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); 
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+th { background: rgba(0,0,0,0.02); color: var(--muted); text-align: left; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+body.dark th { background: rgba(255,255,255,0.02); }
+td { padding: 14px 20px; border-bottom: 1px solid var(--border); vertical-align: middle; transition: background 0.2s; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--accent-lighter); }
+
+.chips { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.chip { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: 13px; color: var(--muted); backdrop-filter: blur(8px); box-shadow: var(--shadow); }
+.chip b { color: var(--text); font-weight: 700; margin-left: 4px; }
+
+.badge { display: inline-flex; align-items: center; justify-content: center; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+.badge-yes, .badge-green { background: var(--accent-light); color: var(--accent-dark); border: 1px solid rgba(16, 185, 129, 0.2); }
+.badge-no { background: var(--border); color: var(--muted); }
+.badge-red { background: rgba(225, 29, 72, 0.15); color: var(--red); border: 1px solid rgba(225, 29, 72, 0.2); }
+.badge-pending { background: rgba(217, 119, 6, 0.15); color: var(--pending); border: 1px solid rgba(217, 119, 6, 0.2); }
+
+.detail { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.detail .row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border); transition: background 0.2s; }
+.detail .row:last-child { border-bottom: none; }
+.detail .row:hover { background: rgba(0,0,0,0.01); }
+body.dark .detail .row:hover { background: rgba(255,255,255,0.01); }
+.detail .k { width: 180px; min-width: 180px; color: var(--muted); font-weight: 500; display: flex; align-items: center; }
+.detail .v { flex: 1; word-break: break-all; font-weight: 500; }
+
+.message-box { 
+  background: var(--accent-lighter); border-left: 3px solid var(--accent); 
+  padding: 10px 16px; border-radius: 4px 8px 8px 4px; 
+  font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text);
+  white-space: pre-wrap; line-height: 1.5;
+}
+
+.raw { 
+  background: #0F172A; color: #34D399; padding: 20px; border-radius: 12px; 
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; word-break: break-all; white-space: pre-wrap; margin-top: 16px;
+  box-shadow: inset 0 2px 10px rgba(0,0,0,0.5); line-height: 1.6; border: 1px solid #1E293B;
+}
+
+.pager { display: flex; justify-content: space-between; margin-top: 24px; align-items: center; }
+.pager button { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 10px 20px; border-radius: 10px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: var(--shadow); font-family: 'Outfit', sans-serif; }
+.pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+.pager button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pager span { color: var(--muted); font-size: 13px; font-weight: 500; }
+
+footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 20px; border-top: 1px solid var(--border); margin-top: auto; }
+footer a { color: var(--accent); font-weight: 600; }
+
+.tx-in { color: var(--green); }
+.tx-out { color: var(--red); }
+.tx-pending { color: var(--pending); }
+
+.theme-btn { 
+  background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); 
+  border-radius: 10px; padding: 8px 16px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  font-family: 'Outfit', sans-serif; display: flex; align-items: center; gap: 8px;
+}
+.theme-btn:hover { background: rgba(255,255,255,0.2); }
+
+.more-btn { background: var(--accent-lighter); color: var(--accent); border: 1px solid var(--accent-light); border-radius: 8px; padding: 6px 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-family: 'Outfit', sans-serif; font-size: 12px; margin-top: 8px; }
+.more-btn:hover { background: var(--accent-light); }
+
+@media(max-width: 768px) {
+  header { padding: 16px; gap: 16px; }
+  #qwrap { width: 100%; }
+  #q { width: 100%; }
+  .detail .row { flex-direction: column; gap: 6px; }
+  .detail .k { width: 100%; min-width: auto; }
+}
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">ORI <b>&#9671; Explorer</b></div>
+  <a href="#/" class="logo" style="text-decoration:none; color:inherit;">ORI <b>&#9671; Explorer</b> <span>2026</span></a>
   <nav id="nav">
     <a href="#/" data-nav="home">Home</a>
     <a href="#/blocks" data-nav="blocks">Blocks</a>
     <a href="#/mempool" data-nav="mempool">Mempool</a>
   </nav>
   <div id="qwrap">
-    <button id="theme" class="theme-btn" type="button">Dark</button>
-    <input id="q" type="text" placeholder="Search block height, hash, txid, or address" autocomplete="off">
+    <button id="theme" class="theme-btn" type="button">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      <span>Dark</span>
+    </button>
+    <input id="q" type="text" placeholder="Search block height, hash, txid, or address..." autocomplete="off">
   </div>
 </header>
 <div id="banner"></div>
 <main id="sub"></main>
-<footer>ORI Explorer &mdash; served by your ORI node. API docs at <a href="/docs" target="_blank">/docs</a></footer>
+<footer>ORI Network Explorer &copy; 2026 &mdash; Built on Python. API available at <a href="/docs" target="_blank">/docs</a></footer>
 <script>
 "use strict";
 const API = new URLSearchParams(location.search).get("node") || "";
 const $ = s => document.querySelector(s);
-const savedTheme = localStorage.getItem("oriExplorerTheme") || "light";
+const savedTheme = localStorage.getItem("oriExplorerTheme") || "dark";
 document.body.classList.toggle("dark", savedTheme === "dark");
 window.addEventListener("DOMContentLoaded", () => {
   const btn = $("#theme");
   if (btn) {
-    btn.textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
+    btn.querySelector("span").textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
     btn.onclick = () => {
       const dark = !document.body.classList.contains("dark");
       document.body.classList.toggle("dark", dark);
       localStorage.setItem("oriExplorerTheme", dark ? "dark" : "light");
-      btn.textContent = dark ? "Light" : "Dark";
+      btn.querySelector("span").textContent = dark ? "Light" : "Dark";
     };
   }
 });
@@ -123,13 +214,13 @@ const diffFromBits = bits => {
 };
 const fmtOri = sats => {
   const v = Number(sats) / COIN;
-  return v.toLocaleString("en-US", {maximumFractionDigits: 8}) + " ORI";
+  return v.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 8}) + " ORI";
 };
 const fmtShortOri = sats => {
   const v = Number(sats) / COIN;
-  return v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(1)+"k" : v.toFixed(2);
+  return v >= 1e6 ? (v/1e6).toFixed(2)+"M" : v >= 1e3 ? (v/1e3).toFixed(1)+"k" : v.toFixed(2);
 };
-const shortHash = h => h ? h.slice(0,12) + "…" + h.slice(-8) : "?";
+const shortHash = h => h ? h.slice(0,12) + "…" + h.slice(-10) : "?";
 const age = ts => {
   const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
   if (s < 60) return s + "s ago";
@@ -137,7 +228,7 @@ const age = ts => {
   if (s < 86400) return Math.floor(s/3600) + "h ago";
   return Math.floor(s/86400) + "d ago";
 };
-const fmtTime = ts => new Date(ts * 1000).toLocaleString("en-GB");
+const fmtTime = ts => new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "medium" });
 const rewardAt = h => Math.floor((state.reward || 4628000000) / Math.pow(2, Math.min(63, Math.floor(h / (state.halving || 2102400)))));
 
 async function api(path){
@@ -147,7 +238,7 @@ async function api(path){
 }
 function fail(e){
   $("#banner").style.display = "block";
-  $("#banner").textContent = "Cannot reach node API: " + e.message + (API ? "" : " (served from the node itself — check your HTTPS domain)");
+  $("#banner").innerHTML = `<b>Connection Error:</b> ${e.message} ${API ? "" : "(served from the node itself — check your HTTPS domain)"}`;
 }
 function navActive(){
   const cur = location.hash.split("?")[0] || "#/";
@@ -180,28 +271,41 @@ async function loadHome(){
   const supplyPct = Math.min(100, supply.circulating_sats / supply.max_supply_sats * 100);
   $("#sub").innerHTML = `
     <div class="cards">
-      <div class="card"><div class="k">Height</div><div class="v">${info.height.toLocaleString()}</div><div class="s">best ${shortHash(info.best_hash)}</div></div>
-      <div class="card"><div class="k">Difficulty</div><div class="v">${(+info.difficulty).toFixed(2)}</div><div class="s">total work ${fmtShortWork(info.total_work)}</div></div>
-      <div class="card"><div class="k">Circulating</div><div class="v">${fmtShortOri(supply.circulating_sats)}</div><div class="s">of ${fmtShortOri(supply.max_supply_sats)} max</div><div class="bar"><i style="width:${supplyPct}%"></i></div></div>
-      <div class="card"><div class="k">Block reward</div><div class="v">${fmtOri(supply.current_block_reward_sats)}</div><div class="s">halving in ${supply.blocks_until_halving.toLocaleString()} blocks</div></div>
-      <div class="card"><div class="k">Mempool</div><div class="v">${info.mempool_txs.toLocaleString()}</div><div class="s">pending txs</div></div>
-      <div class="card"><div class="k">Peers</div><div class="v">${info.peers}</div><div class="s">connected nodes</div></div>
-      <div class="card"><div class="k">Block time</div><div class="v">${info.block_time_seconds}s</div><div class="s">avg last blocks</div></div>
+      <div class="card"><div class="k">Block Height</div><div class="v">${info.height.toLocaleString()}</div><div class="s">Best: <span class="mono">${shortHash(info.best_hash)}</span></div></div>
+      <div class="card"><div class="k">Network Difficulty</div><div class="v">${(+info.difficulty).toFixed(2)}</div><div class="s">Total work: ${fmtShortWork(info.total_work)}</div></div>
+      <div class="card"><div class="k">Circulating Supply</div><div class="v">${fmtShortOri(supply.circulating_sats)}</div><div class="s">Max: ${fmtShortOri(supply.max_supply_sats)}</div><div class="bar"><i style="width:${supplyPct}%"></i></div></div>
+      <div class="card"><div class="k">Block Reward</div><div class="v">${fmtOri(supply.current_block_reward_sats)}</div><div class="s">Halving in ${supply.blocks_until_halving.toLocaleString()} blocks</div></div>
+      <div class="card"><div class="k">Mempool</div><div class="v">${info.mempool_txs.toLocaleString()}</div><div class="s">Pending transactions</div></div>
+      <div class="card"><div class="k">Active Peers</div><div class="v">${info.peers}</div><div class="s">Connected nodes</div></div>
     </div>
-    <h2>Latest blocks</h2>
+    
+    <h2>Latest Blocks</h2>
+    <div style="overflow-x:auto;">
     <table>
-      <tr><th>Height</th><th>Age</th><th>Time</th><th class="right">Txs</th><th class="right">Size</th><th class="right">Difficulty</th><th class="right">Miner reward</th></tr>
-      ${rows.map(b => `<tr><td><a href="#/block/${b.height}">${b.height}</a></td><td class="muted">${age(b.timestamp)}</td><td class="muted">${fmtTime(b.timestamp)}</td><td class="right">${b.tx_count}</td><td class="right muted">${b.size} B</td><td class="right">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</td><td class="right mono">${fmtOri(rewardAt(b.height))}</td></tr>`).join("")}
+      <tr><th>Height</th><th>Age</th><th>Time</th><th class="right">Txs</th><th class="right">Size</th><th class="right">Difficulty</th><th class="right">Miner Reward</th></tr>
+      ${rows.map(b => `<tr>
+        <td><b><a href="#/block/${b.height}">#${b.height}</a></b></td>
+        <td class="muted">${age(b.timestamp)}</td>
+        <td class="muted">${fmtTime(b.timestamp)}</td>
+        <td class="right"><b>${b.tx_count}</b></td>
+        <td class="right muted">${b.size} B</td>
+        <td class="right">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</td>
+        <td class="right mono tx-in">${fmtOri(rewardAt(b.height))}</td>
+      </tr>`).join("")}
     </table>
-    <div class="pager"><span></span><button onclick="location.hash='#/blocks'">View all blocks &rarr;</button></div>
-    <h2>Latest Transaction</h2>
+    </div>
+    <div class="pager"><span>Showing last 10 blocks</span><button onclick="location.hash='#/blocks'">View All Blocks &rarr;</button></div>
+    
+    <h2>Pending Transactions</h2>
+    <div style="overflow-x:auto;">
     ${latestTxs.length ? `<table>
-      <tr><th>Txid</th><th>Time</th><th class="right">Amount</th></tr>
+      <tr><th>Transaction ID (TxID)</th><th>Time</th><th class="right">Amount</th></tr>
       ${latestTxs.map(t => {
         const val = (t.outputs || []).reduce((a,o) => a + o.value, 0);
         return `<tr><td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td><td class="muted">${t.timestamp ? fmtTime(t.timestamp) : "pending"}</td><td class="right mono tx-pending">${fmtOri(val)}</td></tr>`;
       }).join("")}
-    </table>` : `<p class="muted">No pending transactions.</p>`}`;
+    </table>` : `<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px; text-align:center; color:var(--muted); font-weight:500;">No pending transactions in mempool. Network is caught up!</div>`}
+    </div>`;
   scheduleAuto(loadHome, 5000);
 }
 function fmtShortWork(w){
@@ -222,15 +326,25 @@ async function loadBlocks(start){
   const rows = (d.chain || []).slice().sort((a,b) => b.height - a.height);
   const newest = s + 25 >= d.tip;
   $("#sub").innerHTML = `
-    <h2>Blocks <span class="muted" style="text-transform:none;font-weight:400">(${d.tip.toLocaleString()} total)</span></h2>
+    <h2>Blockchain Explorer <span class="badge badge-green" style="margin-left:8px">${d.tip.toLocaleString()} total blocks</span></h2>
+    <div style="overflow-x:auto;">
     <table>
-      <tr><th>Height</th><th>Age</th><th>Time</th><th class="right">Transactions</th><th class="right">Size</th><th class="right">Difficulty</th><th class="right">Miner reward</th></tr>
-      ${rows.map(b => `<tr><td><a href="#/block/${b.height}">${b.height}</a></td><td class="muted">${age(b.timestamp)}</td><td class="muted">${fmtTime(b.timestamp)}</td><td class="right"><a href="#/block/${b.height}">${b.tx_count}</a></td><td class="right muted">${b.size} B</td><td class="right">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</td><td class="right mono">${fmtOri(rewardAt(b.height))}</td></tr>`).join("")}
+      <tr><th>Height</th><th>Age</th><th>Time</th><th class="right">Transactions</th><th class="right">Size</th><th class="right">Difficulty</th><th class="right">Miner Reward</th></tr>
+      ${rows.map(b => `<tr>
+        <td><b><a href="#/block/${b.height}">#${b.height}</a></b></td>
+        <td class="muted">${age(b.timestamp)}</td>
+        <td class="muted">${fmtTime(b.timestamp)}</td>
+        <td class="right"><b><a href="#/block/${b.height}">${b.tx_count}</a></b></td>
+        <td class="right muted">${b.size} B</td>
+        <td class="right">${(isFinite(b.difficulty) ? b.difficulty : diffFromBits(b.bits)).toFixed(2)}</td>
+        <td class="right mono tx-in">${fmtOri(rewardAt(b.height))}</td>
+      </tr>`).join("")}
     </table>
+    </div>
     <div class="pager">
-      <button ${newest ? "disabled" : ""} onclick="location.hash='#/blocks?start=${s+25}'">&larr; Newer</button>
-      <span>${s} &ndash; ${Math.min(d.tip, s + 24)} of ${d.tip}</span>
-      <button ${s === 0 ? "disabled" : ""} onclick="location.hash='#/blocks?start=${Math.max(0, s-25)}'">Older &rarr;</button>
+      <button ${newest ? "disabled" : ""} onclick="location.hash='#/blocks?start=${s+25}'">&larr; Newer Blocks</button>
+      <span>Showing blocks ${s} &ndash; ${Math.min(d.tip, s + 24)}</span>
+      <button ${s === 0 ? "disabled" : ""} onclick="location.hash='#/blocks?start=${Math.max(0, s-25)}'">Older Blocks &rarr;</button>
     </div>`;
 }
 
@@ -245,29 +359,32 @@ async function loadBlock(height){
   $("#sub").innerHTML = `
     <h2>Block #${b.height}</h2>
     <div class="detail">
-      <div class="row"><div class="k">Height</div><div class="v">${b.height}</div></div>
+      <div class="row"><div class="k">Height</div><div class="v"><b>${b.height}</b></div></div>
       <div class="row"><div class="k">Hash</div><div class="v mono">${b.hash}</div></div>
-      <div class="row"><div class="k">Previous hash</div><div class="v mono">${b.height > 0 ? `<a href="#/block/${b.height-1}">${b.prev_hash}</a>` : b.prev_hash}</div></div>
-      <div class="row"><div class="k">Merkle root</div><div class="v mono">${b.merkle_root}</div></div>
-      <div class="row"><div class="k">Timestamp</div><div class="v">${fmtTime(b.timestamp)} UTC (${age(b.timestamp)})</div></div>
+      <div class="row"><div class="k">Previous Hash</div><div class="v mono">${b.height > 0 ? `<a href="#/block/${b.height-1}">${b.prev_hash}</a>` : b.prev_hash}</div></div>
+      <div class="row"><div class="k">Merkle Root</div><div class="v mono">${b.merkle_root}</div></div>
+      <div class="row"><div class="k">Timestamp</div><div class="v">${fmtTime(b.timestamp)} UTC <span class="muted">(${age(b.timestamp)})</span></div></div>
       <div class="row"><div class="k">Difficulty</div><div class="v">${isFinite(diff) ? diff.toFixed(2) : "n/a"}</div></div>
       <div class="row"><div class="k">Bits / Nonce</div><div class="v mono">0x${b.bits.toString(16)} / ${b.nonce}</div></div>
       <div class="row"><div class="k">Version</div><div class="v">0x${b.version.toString(16)}</div></div>
-      <div class="row"><div class="k">Size</div><div class="v">${b.size} bytes</div></div>
-      <div class="row"><div class="k">Miner reward</div><div class="v mono">${(() => {
+      <div class="row"><div class="k">Size</div><div class="v">${b.size.toLocaleString()} bytes</div></div>
+      <div class="row"><div class="k">Miner Reward</div><div class="v mono tx-in">${(() => {
         const cbVal = (txs[0] && txs[0].coinbase) ? txs[0].output_value : null;
         const subsidy = rewardAt(b.height);
         const fees = cbVal != null ? Math.max(0, cbVal - subsidy) : 0;
         if (cbVal == null) return fmtOri(subsidy);
-        return `${fmtOri(cbVal)} <span class="muted">(subsidy ${fmtOri(subsidy)}${fees > 0 ? ` + tx fees ${fmtOri(fees)}` : ""})</span>`;
+        return `<b>${fmtOri(cbVal)}</b> <span class="muted">(Subsidy: ${fmtOri(subsidy)}${fees > 0 ? ` + Fees: ${fmtOri(fees)}` : ""})</span>`;
       })()}</div></div>
-      <div class="row"><div class="k">Transactions</div><div class="v">${b.tx_count}</div></div>
+      <div class="row"><div class="k">Transactions</div><div class="v"><b>${b.tx_count}</b></div></div>
     </div>
-    <h2>Transactions</h2>
+    
+    <h2>Transactions in Block</h2>
+    <div style="overflow-x:auto;">
     <table>
-      <tr><th>Txid</th><th class="right">Output value</th></tr>
-      ${txs.map((t, i) => `<tr><td class="mono"><a href="#/tx/${t.txid}">${i === 0 ? "&#9671; Coinbase Reward" : shortHash(t.txid)}</a></td><td class="right mono">${fmtOri(t.output_value)}</td></tr>`).join("")}
-    </table>`;
+      <tr><th>Transaction ID (TxID)</th><th class="right">Output Value</th></tr>
+      ${txs.map((t, i) => `<tr><td class="mono"><a href="#/tx/${t.txid}">${i === 0 ? "<b>&#9671; Coinbase Reward</b>" : shortHash(t.txid)}</a></td><td class="right mono ${i === 0 ? "tx-in" : ""}">${fmtOri(t.output_value)}</td></tr>`).join("")}
+    </table>
+    </div>`;
 }
 
 /* ── Transaction detail ──────────────────────────────── */
@@ -286,33 +403,43 @@ async function loadTx(txid){
     const subsidy = rewardAt(d.block.height);
     const cbFees = Math.max(0, outValue - subsidy);
     rewardRows = `
-      <div class="row"><div class="k">Type</div><div class="v">&#9671; <b>Coinbase Reward</b> <span class="muted">(new coins generated by mining)</span></div></div>
-      <div class="row"><div class="k">Block subsidy</div><div class="v mono">${fmtOri(subsidy)}</div></div>
-      ${cbFees > 0 ? `<div class="row"><div class="k">Tx fees collected</div><div class="v mono tx-in">${fmtOri(cbFees)} <span class="muted">(from transactions included in this block)</span></div></div>` : ""}
-      <div class="row"><div class="k">Total miner reward</div><div class="v mono tx-in"><b>${fmtOri(outValue)}</b></div></div>`;
+      <div class="row"><div class="k">Type</div><div class="v"><span class="badge badge-green">&#9671; Coinbase Reward</span> <span class="muted" style="margin-left:8px">New coins generated by mining</span></div></div>
+      <div class="row"><div class="k">Block Subsidy</div><div class="v mono">${fmtOri(subsidy)}</div></div>
+      ${cbFees > 0 ? `<div class="row"><div class="k">Tx Fees Collected</div><div class="v mono tx-in">+ ${fmtOri(cbFees)} <span class="muted">(From transactions in this block)</span></div></div>` : ""}
+      <div class="row"><div class="k">Total Miner Reward</div><div class="v mono tx-in"><b>${fmtOri(outValue)}</b></div></div>`;
   }
   $("#sub").innerHTML = `
-    <h2>Transaction</h2>
+    <h2>Transaction Details</h2>
     <div class="detail">
-      <div class="row"><div class="k">Txid</div><div class="v mono">${d.txid}</div></div>
-      <div class="row"><div class="k">Status</div><div class="v">${confirmed ? '<span class="badge badge-green">Confirmed</span>' : '<span class="badge badge-pending">Pending (mempool)</span>'} <span class="muted">${conf} confirmation${conf === 1 ? "" : "s"}</span></div></div>
-      <div class="row"><div class="k">Block</div><div class="v">${confirmed && d.block && d.block.height != null ? `<a href="#/block/${d.block.height}">#${d.block.height}</a> <span class="muted mono">(${shortHash(d.block.hash)})</span>` : "not mined yet"}</div></div>
+      <div class="row"><div class="k">TxID</div><div class="v mono"><b>${d.txid}</b></div></div>
+      <div class="row"><div class="k">Status</div><div class="v">${confirmed ? '<span class="badge badge-green">Confirmed</span>' : '<span class="badge badge-pending">Pending (Mempool)</span>'} <span class="muted" style="margin-left:8px; font-weight:600">${conf} confirmation${conf === 1 ? "" : "s"}</span></div></div>
+      <div class="row"><div class="k">Block</div><div class="v">${confirmed && d.block && d.block.height != null ? `<b><a href="#/block/${d.block.height}">#${d.block.height}</a></b> <span class="muted mono">(${shortHash(d.block.hash)})</span>` : "Not mined yet"}</div></div>
       <div class="row"><div class="k">Timestamp</div><div class="v">${d.timestamp ? fmtTime(d.timestamp) : "&ndash;"}</div></div>
-      <div class="row"><div class="k">Size</div><div class="v">${d.size} bytes</div></div>
-      ${isCoinbase ? "" : `<div class="row"><div class="k">Fee</div><div class="v">${fee ? fmtOri(fee) : "&ndash;"}${d.fee_rate_sats ? ` <span class="muted">(${d.fee_rate_sats} sats/vB)</span>` : ""}</div></div>`}
+      <div class="row"><div class="k">Size</div><div class="v">${d.size.toLocaleString()} bytes</div></div>
+      ${isCoinbase ? "" : `<div class="row"><div class="k">Fee</div><div class="v mono">${fee ? fmtOri(fee) : "&ndash;"}${d.fee_rate_sats ? ` <span class="muted">(${d.fee_rate_sats} sats/vB)</span>` : ""}</div></div>`}
       ${rewardRows}
-      <div class="row"><div class="k">Version / Locktime</div><div class="v mono">${d.version} / ${d.locktime}</div></div>
+      <div class="row"><div class="k">Version / Locktime</div><div class="v mono">v${d.version} / ${d.locktime}</div></div>
+      ${d.message ? `<div class="row"><div class="k">Message</div><div class="v"><div class="message-box">${esc(d.message)}</div></div></div>` : ""}
+      
       <div class="row"><div class="k">Inputs (${ins.length})</div><div class="v">
-        ${(ins.length === 0 || (ins[0] && ins[0].coinbase)) ? '<div style="padding:3px 0">&#9671; <b>Coinbase Reward</b> <span class="muted">&mdash; new coins generated in this block (no spender inputs)</span></div>'
+        ${(ins.length === 0 || (ins[0] && ins[0].coinbase)) ? '<div style="padding:4px 0"><span class="badge badge-green">&#9671; Coinbase</span> <span class="muted" style="margin-left:8px">&mdash; New coins generated in this block</span></div>'
           : ins.map((i, idx) => `
-          <div class="${idx >= 5 ? "input-extra" : ""}" style="padding:3px 0;${idx >= 5 ? "display:none" : ""}"><span class="mono"><a href="#/tx/${i.prev_txid}">${shortHash(i.prev_txid)}</a>:${i.prev_vout}</span> <span class="muted mono">${i.value != null ? "&middot; " + fmtOri(i.value) : ""}</span></div>`).join("")}
+          <div class="${idx >= 5 ? "input-extra" : ""}" style="padding:6px 0; border-bottom:1px dashed var(--border); ${idx >= 5 ? "display:none" : ""}">
+            <span class="mono"><a href="#/tx/${i.prev_txid}">${shortHash(i.prev_txid)}</a>:${i.prev_vout}</span> 
+            <span class="mono tx-out" style="float:right">${i.value != null ? "- " + fmtOri(i.value) : ""}</span>
+          </div>`).join("")}
         ${!isCoinbase && ins.length > 5 ? `<button id="showInputs" class="more-btn" onclick="showAllInputs()">Show ${ins.length - 5} more inputs</button>` : ""}
       </div></div>
+      
       <div class="row"><div class="k">Outputs (${outs.length})</div><div class="v">
-        ${outs.map((o, i) => `<div style="padding:3px 0"><span class="mono">${o.address ? '<a href="#/address/' + o.address + '">' + esc(o.address) + '</a>' : esc(o.script_pubkey)}</span> <span class="right mono" style="float:right">${fmtOri(o.value)}</span></div>`).join("")}
+        ${outs.map((o, i) => `<div style="padding:6px 0; border-bottom:1px dashed var(--border);">
+            <span class="mono">${o.address ? '<a href="#/address/' + o.address + '">' + esc(o.address) + '</a>' : esc(o.script_pubkey)}</span> 
+            <span class="right mono tx-in" style="float:right">+ ${fmtOri(o.value)}</span>
+          </div>`).join("")}
       </div></div>
     </div>
-    <h2>Raw transaction</h2>
+    
+    <h2>Raw Hex Data</h2>
     <div class="raw">${esc(d.raw_hex || d.hex || "")}</div>`;
 }
 
@@ -327,25 +454,45 @@ async function loadAddress(addr){
   const history = d.history || [];
   const txids = [...new Set(history.map(x => x.txid).filter(Boolean))];
   $("#sub").innerHTML = `
-    <h2>Address</h2>
+    <h2>Wallet Address</h2>
     <div class="detail">
-      <div class="row"><div class="k">Address</div><div class="v mono">${esc(addr)}</div></div>
-      <div class="row"><div class="k">Balance</div><div class="v mono tx-in"><b>${fmtOri(bal)}</b></div></div>
-      <div class="row"><div class="k">Total received</div><div class="v mono tx-in">${fmtOri(d.total_received_sats || 0)}</div></div>
-      <div class="row"><div class="k">Total spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
-      <div class="row"><div class="k">Total volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
-      <div class="row"><div class="k">Immature</div><div class="v mono">${fmtOri(imm)}</div></div>
-      <div class="row"><div class="k">UTXOs / Transactions</div><div class="v">${u.length} UTXOs (${immature.length} immature) / ${txids.length} transactions</div></div>
+      <div class="row"><div class="k">Address</div><div class="v mono" style="font-size:15px"><b>${esc(addr)}</b></div></div>
+      <div class="row"><div class="k">Available Balance</div><div class="v mono tx-in" style="font-size:20px"><b>${fmtOri(bal)}</b></div></div>
+      <div class="row"><div class="k">Total Received</div><div class="v mono tx-in">${fmtOri(d.total_received_sats || 0)}</div></div>
+      <div class="row"><div class="k">Total Spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
+      <div class="row"><div class="k">Total Volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
+      <div class="row"><div class="k">Immature Mining</div><div class="v mono">${fmtOri(imm)}</div></div>
+      <div class="row"><div class="k">Stats</div><div class="v"><span class="badge badge-green">${u.length} UTXOs</span> <span class="badge badge-no" style="margin-left:8px">${txids.length} Transactions</span></div></div>
     </div>
-    <h2>Transactions</h2>
-    ${history.length ? `<table><tr><th>Txid</th><th>Time</th><th>Status</th><th class="right">Amount</th></tr>${history.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="muted">${x.timestamp ? fmtTime(x.timestamp) : "pending"}</td><td>${x.mempool ? '<span class="badge badge-pending">pending</span>' : x.net_sats >= 0 ? '<span class="badge badge-green">received</span>' : '<span class="badge badge-red">sent</span>'}</td><td class="right mono ${x.mempool ? "tx-pending" : x.net_sats >= 0 ? "tx-in" : "tx-out"}">${x.net_sats >= 0 ? "+" : ""}${fmtOri(x.net_sats)}</td></tr>`).join("")}</table>` : '<p class="muted">No transactions.</p>'}
-    <h2>UTXOs</h2>
-    <table><tr><th>Txid</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
-      ${u.map(x => `<tr><td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td><td class="right mono">${x.vout}</td><td class="right mono tx-in">${fmtOri(x.value)}</td><td>${x.mature ? '<span class="badge badge-green">spendable</span>' : '<span class="badge badge-pending">immature</span>'}</td></tr>`).join("")}
-    </table>`;
+    
+    <h2>Transaction History</h2>
+    <div style="overflow-x:auto;">
+    ${history.length ? `<table>
+      <tr><th>Transaction ID</th><th>Time</th><th>Status</th><th class="right">Amount</th></tr>
+      ${history.map(x => `<tr>
+        <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
+        <td class="muted">${x.timestamp ? fmtTime(x.timestamp) : "pending"}</td>
+        <td>${x.mempool ? '<span class="badge badge-pending">Pending</span>' : x.net_sats >= 0 ? '<span class="badge badge-green">Received</span>' : '<span class="badge badge-red">Sent</span>'}</td>
+        <td class="right mono ${x.mempool ? "tx-pending" : x.net_sats >= 0 ? "tx-in" : "tx-out"}"><b>${x.net_sats >= 0 ? "+" : ""}${fmtOri(x.net_sats)}</b></td>
+      </tr>`).join("")}
+    </table>` : '<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px; text-align:center; color:var(--muted); font-weight:500;">No transactions found for this address.</div>'}
+    </div>
+    
+    <h2>Unspent Outputs (UTXOs)</h2>
+    <div style="overflow-x:auto;">
+    ${u.length ? `<table>
+      <tr><th>TxID</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
+      ${u.map(x => `<tr>
+        <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
+        <td class="right mono">${x.vout}</td>
+        <td class="right mono tx-in">${fmtOri(x.value)}</td>
+        <td>${x.mature ? '<span class="badge badge-green">Spendable</span>' : '<span class="badge badge-pending">Immature</span>'}</td>
+      </tr>`).join("")}
+    </table>` : '<p class="muted">No UTXOs.</p>'}
+    </div>`;
 }
 
-/* ── Mempool (blockchain.com style) ──────────────────── */
+/* ── Mempool ─────────────────────────────────────────── */
 async function loadMempool(){
   const [info, mp] = await Promise.all([api("/info/"), api("/mempool/")]);
   const txs = mp.txs || [];
@@ -353,27 +500,32 @@ async function loadMempool(){
   const totalFee = txs.reduce((a,t) => a + t.fee, 0);
   const avgRate = totalBytes ? (totalFee / totalBytes) : 0;
   $("#sub").innerHTML = `
-    <h2>Mempool <span class="muted" style="text-transform:none;font-weight:400">transactions waiting to be confirmed</span></h2>
+    <h2>Mempool <span class="muted" style="text-transform:none;font-weight:400; margin-left:12px; font-size:14px">Transactions waiting to be confirmed</span></h2>
     <div class="chips">
       <span class="chip">Transactions <b>${mp.count}</b></span>
-      <span class="chip">Size <b>${(totalBytes/1024).toFixed(1)} KB</b></span>
-      <span class="chip">Total fees <b>${fmtOri(totalFee)}</b></span>
-      <span class="chip">Avg fee rate <b>${avgRate.toFixed(2)} sats/vB</b></span>
-      <span class="chip">Next block <b>${info.block_time_seconds}s</b></span>
+      <span class="chip">Total Size <b>${(totalBytes/1024).toFixed(1)} KB</b></span>
+      <span class="chip">Total Fees <b class="tx-in">${fmtOri(totalFee)}</b></span>
+      <span class="chip">Avg Fee Rate <b>${avgRate.toFixed(2)} sats/vB</b></span>
+      <span class="chip">Next Block <b>~${info.block_time_seconds}s</b></span>
     </div>
-    ${txs.length === 0 ? '<p class="muted">Mempool is empty.</p>' : `
+    
+    <div style="overflow-x:auto;">
+    ${txs.length === 0 ? '<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:40px; text-align:center; color:var(--muted); font-weight:500;">Mempool is completely empty! Zero pending transactions.</div>' : `
     <table>
       <tr><th>Transaction Hash</th><th class="right">Value</th><th class="right">Fee</th><th class="right">Fee Rate</th><th class="right">Size</th><th>RBF</th></tr>
       ${txs.map(t => {
         const val = (t.outputs || []).reduce((a,o) => a + o.value, 0);
-        return `<tr><td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td>
+        return `<tr>
+          <td class="mono"><a href="#/tx/${t.txid}">${shortHash(t.txid)}</a></td>
           <td class="right mono">${fmtOri(val)}</td>
-          <td class="right mono">${fmtOri(t.fee)}</td>
-          <td class="right mono">${t.fee_rate.toFixed(2)} sats/vB</td>
-          <td class="right muted">${t.size} B</td>
-          <td>${t.rbf ? '<span class="badge badge-yes">RBF</span>' : '<span class="badge badge-no">no</span>'}</td></tr>`;
+          <td class="right mono tx-in">${fmtOri(t.fee)}</td>
+          <td class="right mono">${t.fee_rate.toFixed(2)} <span class="muted">sats/vB</span></td>
+          <td class="right muted">${t.size.toLocaleString()} B</td>
+          <td>${t.rbf ? '<span class="badge badge-yes">RBF Enabled</span>' : '<span class="badge badge-no">No</span>'}</td>
+        </tr>`;
       }).join("")}
-    </table>`}`;
+    </table>`}
+    </div>`;
   scheduleAuto(loadMempool, 5000);
 }
 
@@ -391,7 +543,7 @@ async function router(){
     if (parts[0] === "tx") return loadTx(parts[1]);
     if (parts[0] === "address") return loadAddress(parts[1]);
     if (parts[0] === "mempool") return loadMempool();
-    $("#sub").innerHTML = "<h2>Not found</h2><p class='muted'>Unknown page.</p>";
+    $("#sub").innerHTML = "<div style='text-align:center; padding:60px 0;'><h2>404 Not Found</h2><p class='muted'>The page you are looking for does not exist on this explorer.</p></div>";
   } catch (e) {
     fail(e);
   }
@@ -418,7 +570,7 @@ async function doSearch(){
       } catch (e2) {}
     }
     $("#banner").style.display = "block";
-    $("#banner").textContent = "No match for: " + q;
+    $("#banner").innerHTML = `<b>Search Error:</b> No match found for <i>${esc(q)}</i>`;
     setTimeout(() => $("#banner").style.display = "none", 4000);
   } catch (e) {
     fail(e);

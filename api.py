@@ -275,6 +275,7 @@ def create_app(node, lifespan=None):
             return {
                 "version": raw_tx.version,
                 "locktime": raw_tx.locktime,
+                "message": getattr(raw_tx, "message", ""),
                 "size": len(raw_tx.serialize()),
                 "inputs": inputs,
                 "outputs": outputs,

@@ -68,6 +68,7 @@ class Transaction:
     inputs: list = None
     outputs: list = None
     locktime: int = 0
+    message: str = ""
 
     def __post_init__(self):
         if self.inputs is None:
@@ -88,6 +89,10 @@ class Transaction:
         for txout in self.outputs:
             parts.append(txout.serialize())
         parts.append(struct.pack("<I", self.locktime))
+        msg_bytes = self.message.encode("utf-8")
+        parts.append(varint_encode(len(msg_bytes)))
+        if msg_bytes:
+            parts.append(msg_bytes)
         return b"".join(parts)
 
     @classmethod
@@ -106,7 +111,16 @@ class Transaction:
             outputs.append(txout)
         locktime = struct.unpack_from("<I", data, pos)[0]
         pos += 4
-        return cls(version, inputs, outputs, locktime), pos
+        message = ""
+        if pos < len(data):
+            try:
+                mlen, pos = varint_decode(data, pos)
+                if mlen > 0:
+                    message = data[pos : pos + mlen].decode("utf-8", errors="replace")
+                    pos += mlen
+            except Exception:
+                pass
+        return cls(version, inputs, outputs, locktime, message), pos
 
     def txid(self) -> bytes:
         return sha256d(self.serialize())
@@ -136,8 +150,6 @@ class Transaction:
 def coinbase_tx(height: int, reward_sats: int, address: str, note: str = "", fee_address: str = "", fee_pct: float = 0.0) -> Transaction:
     hbytes = height.to_bytes((height.bit_length() + 7) // 8 or 1, "little")
     script = bytes([len(hbytes)]) + hbytes
-    if note:
-        script += note.encode()
     txin = TxIn(NULL_HASH, 0xFFFFFFFF, script)
     
     if fee_address and fee_pct > 0.0:
@@ -145,10 +157,10 @@ def coinbase_tx(height: int, reward_sats: int, address: str, note: str = "", fee
         miner_sats = reward_sats - fee_sats
         txout1 = TxOut(miner_sats, address.encode())
         txout2 = TxOut(fee_sats, fee_address.encode())
-        return Transaction(1, [txin], [txout1, txout2], 0)
+        return Transaction(1, [txin], [txout1, txout2], 0, note)
     else:
         txout = TxOut(reward_sats, address.encode())
-        return Transaction(1, [txin], [txout], 0)
+        return Transaction(1, [txin], [txout], 0, note)
 
 
 def coinbase_height(tx: Transaction):
@@ -161,8 +173,8 @@ def coinbase_height(tx: Transaction):
     return int.from_bytes(script[1 : 1 + size], "little")
 
 
-def make_transfer(inputs: list, outputs: list, locktime: int = 0, rbf: bool = False) -> Transaction:
+def make_transfer(inputs: list, outputs: list, locktime: int = 0, rbf: bool = False, message: str = "") -> Transaction:
     seq = RBF_SEQUENCE if rbf else 0xFFFFFFFF
     txins = [TxIn(txid, vout, sequence=seq) for txid, vout in inputs]
     txouts = [TxOut(value, addr.encode()) for value, addr in outputs]
-    return Transaction(1, txins, txouts, locktime)
+    return Transaction(1, txins, txouts, locktime, message)

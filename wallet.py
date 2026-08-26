@@ -320,7 +320,7 @@ def cmd_balance(args, wallet):
     print(f"utxo count : {len(data['utxos'])}")
 
 
-def _estimate_size(inputs: list, outputs: list) -> int:
+def _estimate_size(inputs: list, outputs: list, message: str = "") -> int:
     from tx import Transaction, TxIn, TxOut
 
     tx = Transaction(
@@ -331,6 +331,7 @@ def _estimate_size(inputs: list, outputs: list) -> int:
         ],
         outputs=[TxOut(value=v, script_pubkey=a.encode()) for v, a in outputs],
         locktime=0,
+        message=message,
     )
     return len(tx.serialize())
 
@@ -389,6 +390,7 @@ def plan_send(
     tier: int,
     cfg: Config = None,
     subtract_fee: bool = False,
+    message: str = "",
 ) -> dict:
     cfg = cfg or Config()
     if amount_sats <= 0:
@@ -408,7 +410,7 @@ def plan_send(
     for u in spendable:
         selected.append(u)
         total += u["value"]
-        size = _estimate_size(selected, [(max(amount_sats, 1), to_addr), (1, from_addr)])
+        size = _estimate_size(selected, [(max(amount_sats, 1), to_addr), (1, from_addr)], message)
         fee = math.ceil(size * rate)
         if subtract_fee:
             if total >= amount_sats and amount_sats > fee:
@@ -435,7 +437,7 @@ def plan_send(
         raise WalletError("fee exceeds amount")
 
     outputs = [(send_amount, to_addr)] if change == 0 else [(send_amount, to_addr), (change, from_addr)]
-    size = _estimate_size(selected, outputs)
+    size = _estimate_size(selected, outputs, message)
     fee = math.ceil(size * rate)
 
     # Recalculate with accurate size
@@ -445,7 +447,7 @@ def plan_send(
         if send_amount <= 0 or change < 0:
             raise WalletError("insufficient funds after fee")
         outputs = [(send_amount, to_addr)] if change == 0 else [(send_amount, to_addr), (change, from_addr)]
-        size = _estimate_size(selected, outputs)
+        size = _estimate_size(selected, outputs, message)
         fee = math.ceil(size * rate)
         send_amount = amount_sats - fee
         change = total - amount_sats
@@ -468,6 +470,7 @@ def plan_send(
         "change": change,
         "total_in": total,
         "tier": tier,
+        "message": message,
     }
 
 
@@ -484,6 +487,7 @@ def sign_planned_wallet(wallet: dict, plan: dict, rbf: bool = False):
         [(bytes.fromhex(u["txid"]), u["vout"]) for u in plan["selected"]],
         plan["outputs"],
         rbf=rbf or plan.get("rbf", False),
+        message=plan.get("message", ""),
     )
     digest = tx.sighash()
     for i, txin in enumerate(tx.inputs):
@@ -529,7 +533,7 @@ def cmd_send(args, wallet):
         sys.exit(str(exc))
 
     try:
-        plan = plan_send(utxos, args.to, from_addr, amount_sats, tier, cfg)
+        plan = plan_send(utxos, args.to, from_addr, amount_sats, tier, cfg, message=getattr(args, "message", ""))
     except WalletError as exc:
         sys.exit(str(exc))
 
@@ -573,6 +577,8 @@ def cmd_send(args, wallet):
     print("-" * 45)
     print(f"Amount   : {format_ori(plan['send_amount'])} ({plan['send_amount']:,} sats)")
     print(f"To       : {args.to}")
+    if plan.get('message'):
+        print(f"Message  : {plan['message']}")
     print(f"TxID     : {txid}")
     print(f"Fee      : {plan['fee']:,} sats (size: {plan['size']} vB @ {plan['rate']} sat/vB)")
     if current_height is not None:
@@ -622,6 +628,7 @@ def main():
         required=True,
         help="fee tier: 5=slowest/cheapest (0.28 sat/vB) .. 1=fastest/highest (1.4 sat/vB)",
     )
+    p.add_argument("--message", default="", help="Optional message to embed in the transaction")
     p.set_defaults(func=cmd_send)
 
     p = sub.add_parser("bump-fee")

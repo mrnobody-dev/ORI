@@ -58,22 +58,35 @@ python qt_app.py
 
 ORI is highly optimized for CPU mining (SHA-256d). You can mine **Solo** (directly to your own node) or connect to a **PPLNS Pool** (mining with others to share rewards).
 
-### Option 1: Mining on Windows (Easy Mode)
+### Option 1: Mining on Windows (Easy Mode GUI/Batch)
 If you downloaded the Windows `.zip` release, you already have everything you need!
 1. Open the folder where you extracted ORI.
 2. Double-click the file named `CPU miner launcher.bat`.
 3. Paste your ORI wallet address and choose how many CPU threads to use.
 4. The miner will automatically connect to the Official Pool and start hashing!
 
-### Option 2: Mining from Source Code
-If you are running from source, start your local node first (`python qt_app.py`), then open a new terminal:
+### Option 2: CLI Mining with `miner-ori.exe` (Windows)
+If you prefer using the Command Prompt (cmd) or PowerShell directly using the compiled executable, use the following commands:
 
-**Solo Mining (Requires a synced local node):**
+**Solo Mining (Requires `ORICore.exe` running locally):**
+```cmd
+miner-ori.exe --address ori1YOUR_ADDRESS --threads 4
+```
+
+**Pool Mining (PPLNS):**
+```cmd
+miner-ori.exe --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 4
+```
+
+### Option 3: Mining from Source Code (Python)
+If you are running from source code on Linux/Mac/Windows, start your local node first (`python qt_app.py`), then open a new terminal:
+
+**Solo Mining:**
 ```bash
 python miner.py --address ori1YOUR_ADDRESS --threads 4
 ```
 
-**Pool Mining (PPLNS):**
+**Pool Mining:**
 ```bash
 python miner.py --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 4
 ```

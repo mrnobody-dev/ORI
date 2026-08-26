@@ -1,341 +1,340 @@
-# 🔍 LAPORAN AUDIT KEAMANAN & BUG — ORI Core (blockchain-fastapi)
+# 🔍 SECURITY AUDIT & BUG REPORT - ORI Core (blockchain-fastapi)
 
-**Tanggal:** 2026-08-24 (Round 1), 2026-08-26 (Round 2 — audit lanjutan)
-**Scope:** Seluruh kode inti (consensus, mempool, P2P, API, wallet, Qt GUI, pool server)
-**Status:** ✅ SELESAI — semua temuan kritis diperbaiki & diverifikasi (**29 unit test + 22 skenario serangan: 0 VULNERABLE**)
-**Hasil akhir:** `pytest tests` = 29 passed · `attack_sim` = 20 DEFENDED/OK + 2 PERF, 0 VULNERABLE
+**Date:** 2026-08-24 (Round 1), 2026-08-26 (Round 2 advanced audit)
+**Scope:** Core codebase (consensus, mempool, P2P, API, wallet, Qt GUI, pool server)
+**Status:** ✅ COMPLETED - all critical findings fixed & verified (**29 unit tests + 22 attack scenarios: 0 VULNERABLE**)
+**Final Result:** `pytest tests` = 29 passed · `attack_sim` = 20 DEFENDED/OK + 2 PERF, 0 VULNERABLE
 
-## 🧪 HASIL SIMULASI SERANGAN (empiris, reproduktif)
+## 🧪 ATTACK SIMULATION RESULTS (empirical, reproducible)
 
-Jalankan ulang: `.venv\Scripts\python.exe tests\attack_sim.py`
+Re-run: `.venv\Scripts\python.exe tests\attack_sim.py`
 
 ```
 TOTAL: 22  |  DEFENDED/OK: 14  |  PERF probes: 2  |  VULNERABLE: 6
 ```
 
-| Kode | Skenario | Hasil |
+| Code | Scenario | Result |
 |---|---|---|
-| A01 | Blok PoW invalid | 🛡 DEFENDED (`proof of work failed`) |
-| A02 | Merkle root dipalsukan | 🛡 DEFENDED |
-| A03 | Inflasi coinbase ×100 | 🛡 DEFENDED (`bad coinbase value`) |
-| A04 | Coinbase klaim height salah | 🛡 DEFENDED (`coinbase height mismatch`) |
-| **A05** | Coinbase height TIDAK ter-parse | 🛡 DEFENDED setelah fix (`coinbase height mismatch (BIP-34)`) |
-| A06 | Bits difficulty lebih mudah | 🛡 DEFENDED |
-| A07 | Timestamp masa depan jauh | 🛡 DEFENDED |
-| A09 | Signature palsu (kunci penyerang) | 🛡 DEFENDED (`invalid signature`) |
-| A10 | Malleability high-S | 🛡 DEFENDED (`high-S signature`) |
+| A01 | Invalid PoW block | 🛡 DEFENDED (`proof of work failed`) |
+| A02 | Forged Merkle root | 🛡 DEFENDED |
+| A03 | Coinbase inflation ×100 | 🛡 DEFENDED (`bad coinbase value`) |
+| A04 | Wrong coinbase height claim | 🛡 DEFENDED (`coinbase height mismatch`) |
+| **A05** | Coinbase height NOT parsed | 🛡 DEFENDED after fix (`coinbase height mismatch (BIP-34)`) |
+| A06 | Easier bits difficulty | 🛡 DEFENDED |
+| A07 | Far future timestamp | 🛡 DEFENDED |
+| A09 | Forged signature (attacker key) | 🛡 DEFENDED (`invalid signature`) |
+| A10 | High-S malleability | 🛡 DEFENDED (`high-S signature`) |
 | A11 | Overspend | 🛡 DEFENDED |
-| A12 | Input duplikat dalam 1 tx | 🛡 DEFENDED |
-| A13 | Belanja coinbase belum mature | 🛡 DEFENDED |
-| A14 | Double-spend mempool tanpa RBF | 🛡 DEFENDED (konflik ditolak) |
-| **C-02** | Anak yatim mempool meracuni template miner | 🛡 DEFENDED setelah fix (cascade-evict; template bersih) |
-| R-01 | Reorg jujur more-work | ✅ OK (fungsi inti sehat) |
-| **C-01** | Spam fork lemah | 🛡 DEFENDED setelah fix — storage BOUNDED (cap `max_side_branch_blocks=512`, FIFO-evict) |
-| **C-07** | Orphan tracking per peer | 🛡 DEFENDED setelah fix — cap 128 FIFO per peer (150 orphan → size=128) |
-| C-03 | Template selection 8k tx | ⚡ FIX: heap O(N log N) — **46.339 ms → 18 ms** (~2500×); ~3 s pada 100k tx |
-| C-04 | getheaders @260 blok | ⚡ FIX: streaming by-height O(window); retarget window via walk-back ≤60 |
-| **C-05** | Perintah pra-handshake | 🛡 DEFENDED setelah fix (handshake gate + ban score + disconnect) |
-| **H-08** | CLI lokal pada bind publik | 🛡 DEFENDED setelah fix — Qt bind API ke 127.0.0.1 by default; endpoint lokal dapat diakses, HTTP 400 (reachable) |
-| E2E | Transfer normal end-to-end | ✅ OK (saldo penerima tepat) |
+| A12 | Duplicate input in 1 tx | 🛡 DEFENDED |
+| A13 | Immature coinbase spend | 🛡 DEFENDED |
+| A14 | Mempool double-spend without RBF | 🛡 DEFENDED (conflict rejected) |
+| **C-02** | Mempool orphan poisons miner template | 🛡 DEFENDED after fix (cascade-evict; clean template) |
+| R-01 | Honest more-work reorg | ✅ OK (core function healthy) |
+| **C-01** | Weak fork spam | 🛡 DEFENDED after fix (storage BOUNDED, cap `max_side_branch_blocks=512`, FIFO-evict) |
+| **C-07** | Orphan tracking per peer | 🛡 DEFENDED after fix (cap 128 FIFO per peer, 150 orphans -> size=128) |
+| C-03 | Template selection 8k tx | ⚡ FIX: O(N log N) heap (46.339 ms -> 18 ms) (~2500×); ~3 s at 100k tx |
+| C-04 | getheaders @260 blocks | ⚡ FIX: streaming by-height O(window); retarget window via walk-back ≤60 |
+| **C-05** | Pre-handshake commands | 🛡 DEFENDED after fix (handshake gate + ban score + disconnect) |
+| **H-08** | Local CLI on public bind | 🛡 DEFENDED after fix (Qt bind API to 127.0.0.1 by default; local endpoint accessible, HTTP 400 reachable) |
+| E2E | Normal end-to-end transfer | ✅ OK (exact recipient balance) |
 
-Bonus temuan dari simulasi: mempool yang diberi 8k tx sampah **melumpuhkan pembuatan blok sepenuhnya** (template O(N²) menggantung penambangan) — mengonfirmasi kombinasi C-03 = kill-switch mining.
+Bonus finding from simulation: a mempool flooded with 8k junk txs **completely stalled block creation** (O(N²) template locked mining) confirming the combination of C-03 = mining kill-switch.
 
 ---
 
-## RINGKASAN EKSEKUTIF
+## EXECUTIVE SUMMARY
 
-| Severity | Jumlah | Ringkas |
+| Severity | Count | Summary |
 |---|---|---|
-| 🔴 CRITICAL | 8 | Bisa menghentikan chain, menguras disk/RAM/CPU, atau membuat miner membuat blok invalid |
-| 🟠 HIGH | 9 | DoS terarah, race condition, sinkronisasi macet |
-| 🟡 MEDIUM | 7 | Integritas data, performa, UX |
-| ⚪ LOW/NOTE | 6 | Kosmetik / catatan desain |
+| 🔴 CRITICAL | 8 | Can halt chain, drain disk/RAM/CPU, or cause miners to build invalid blocks |
+| 🟠 HIGH | 9 | Targeted DoS, race conditions, stalled sync |
+| 🟡 MEDIUM | 7 | Data integrity, performance, UX |
+| ⚪ LOW/NOTE | 6 | Cosmetic / design notes |
 
-Total **30 temuan**. Detail per temuan di bawah, lengkap dengan file:line.
+Total **30 findings**. Detailed breakdown below, including file:line.
 
 ---
 
 ## 🔴 CRITICAL
 
-### C-01. Disk-Fill DoS via Spam Side-Chain (fork lemah disimpan tanpa batas)
-- **File:** `chain.py:452-457` (`_maybe_reorg` → "weak fork stored as side branch"), `storage.py:74` (`put_block` main=False)
-- **Masalah:** Fork yang kalah work tetap **disimpan permanen** ke SQLite. Dengan `initial_zeros=2` target PoW sangat mudah (memblok butuh <1 detik di laptop). Penyerang bisa menghasilkan **jutaan blok fork murah** dan mengirimkannya → setiap blok divalidasi penuh lalu disimpan → **disk node penuh**, DB membengkak, `all_blocks()` makin lambat.
-- **Dampak:** Node mati (disk full), sinkronisasi lumpuh.
-- **Rencana fix:** Cap jumlah blok side-branch (mis. maks 512 blok tersimpan; tolak blok samping baru jika cap tercapai kecuali work > tip), + pruning branch yang tertinggal jauh.
+### C-01. Disk-Fill DoS via Spam Side-Chain (weak forks stored indefinitely)
+- **File:** `chain.py:452-457` (`_maybe_reorg` -> "weak fork stored as side branch"), `storage.py:74` (`put_block` main=False)
+- **Issue:** Forks with less work are **permanently stored** to SQLite. With `initial_zeros=2`, the PoW target is very easy (mining a block takes <1 second on a laptop). An attacker can generate **millions of cheap fork blocks** and transmit them. Every block gets fully validated and stored, resulting in **full disk node**, bloated DB, and increasingly slow `all_blocks()`.
+- **Impact:** Node death (disk full), paralyzed sync.
+- **Fix plan:** Cap side-branch blocks (e.g. max 512 stored blocks; reject new side blocks if cap reached unless work > tip), plus pruning far-behind branches.
 
-### C-02. Miner Dapat Membuat Blok INVALID — Anak Yatim Mempool Tidak Dibersihkan
+### C-02. Miner Can Build INVALID Blocks (Mempool Orphans Not Cleaned)
 - **File:** `mempool.py:384-392` (`remove_spent`)
-- **Masalah:** Saat tx konflik dibuang dari mempool (inputnya sudah dimining oleh tx lain), **descendant-nya tidak ikut dibuang**. Tx anak mereferensikan output parent yang **tidak pernah ada di chain**.
-- **Serangan:** Kirim tx A + child B (chained). Lalu miner lain mengonfirmasi double-spend A'. Mempool membuang A tapi **B tetap ada** → `template()` menyertakan B → **miner lokal membangun blok invalid** → reward hangus + hashrate sia-sia. Bisa dipaksa berulang = mining sabotage.
-- **Rencana fix:** Cascade-remove semua descendant yang parent-nya hilang saat remove_spent/konfirmasi.
+- **Issue:** When a conflicting tx is evicted from the mempool (its input was mined by another tx), **its descendants are not evicted**. Child txs reference a parent output that **never existed on chain**.
+- **Attack:** Send tx A + child B (chained). Then another miner confirms double-spend A'. Mempool evicts A but **B remains**. The `template()` includes B causing the **local miner to build an invalid block** resulting in lost reward and wasted hashrate. Can be forced repeatedly = mining sabotage.
+- **Fix plan:** Cascade-remove all descendants whose parents are lost during remove_spent/confirmation.
 
-### C-03. O(N²) Block Template Selection — Miner Stall DoS
+### C-03. O(N²) Block Template Selection (Miner Stall DoS)
 - **File:** `mempool.py:403-452` (`ordered_with_fees`)
-- **Masalah:** Setiap iterasi memanggil `max(...)` memindai seluruh kandidat → kompleksitas kuadratik. `template()` juga memanggil `tx.serialize()` berulang-ulang.
-- **Serangan:** Flood 100.000 tx (batas `max_mempool_txs`) → satu panggilan template butuh ~10¹⁰ operasi → **thread chain/memin terkunci menit-menit**, miner & relay berhenti.
-- **Rencana fix:** Ganti ke heap-based selection O(N log N) + cache ukuran tx.
+- **Issue:** Every iteration calling `max(...)` scans the entire candidate list, resulting in quadratic complexity. `template()` also calls `tx.serialize()` repeatedly.
+- **Attack:** Flood 100,000 txs (`max_mempool_txs` limit). A single template call takes ~10¹⁰ operations, **locking chain/mining threads for minutes**, stalling miners & relays.
+- **Fix plan:** Switch to O(N log N) heap-based selection + cache tx size.
 
-### C-04. Memory DoS — `all_blocks()` Dimuat Penuh per Pesan Sync
+### C-04. Memory DoS (`all_blocks()` Fully Loaded per Sync Message)
 - **File:** `p2p.py:1058` (`reply_blocks`), `p2p.py:1083` (`reply_headers`), `p2p.py:1111` (`on_peer_headers`)
-- **Masalah:** Setiap `getblocks`/`getheaders`/batch headers yang masuk memuat **SELURUH chain** (raw blob semua blok) ke RAM sebelum menyaring 500 item.
-- **Serangan:** Peer tunggal spam `getheaders` → alokasi ratusan MB per detik → OOM / GC storm.
-- **Juga:** Sinkronisasi menjadi **kuadratik** terhadap tinggi chain (tiap batch O(N)).
-- **Rencana fix:** Query by height (`iterate_from`) + resolve start height via hash→height; window retarget via walk-back ≤60 baris, bukan full load.
+- **Issue:** Every `getblocks`/`getheaders`/batch headers incoming loads the **ENTIRE chain** (raw blobs of all blocks) into RAM before slicing 500 items.
+- **Attack:** A single peer spamming `getheaders` allocates hundreds of MB per second causing OOM / GC storms.
+- **Also:** Sync becomes **quadratic** against chain height (each batch O(N)).
+- **Fix plan:** Query by height (`iterate_from`) + resolve start height via hash->height; retarget window via walk-back ≤60 rows, instead of full load.
 
-### C-05. Tidak Ada Enforce Handshake P2P
+### C-05. No P2P Handshake Enforcement
 - **File:** `p2p.py:274-397` (`_dispatch`)
-- **Masalah:** Semua command (`getblocks`, `getheaders`, `inv`, `block`, `tx`, `addr`) diproses **sebelum** `version`/`verack`. Bitcoin Core menolak pesan apa pun pra-handshake.
-- **Serangan:** Koneksi telanjang langsung minta inventori/sync → resource drain tanpa identitas; ban-score tidak relevan karena belum ada reputasi.
-- **Rencana fix:** Tolak + ban score semua command kecuali `version`/`ping`/`pong` sebelum `handshake_complete`.
+- **Issue:** All commands (`getblocks`, `getheaders`, `inv`, `block`, `tx`, `addr`) are processed **before** `version`/`verack`. Bitcoin Core rejects any message pre-handshake.
+- **Attack:** Naked connection instantly requests inventory/sync causing resource drain without identity; ban-score is irrelevant since there is no reputation yet.
+- **Fix plan:** Reject + ban score all commands except `version`/`ping`/`pong` before `handshake_complete`.
 
-### C-06. `/address/{addr}` Tanpa Auth = Full-Chain Scan O(N×M) per Request
+### C-06. Unauthenticated `/address/{addr}` (O(N×M) Full-Chain Scan per Request)
 - **File:** `api.py:309-367`
-- **Masalah:** Endpoint publik ini mengiterasi **semua blok**, dan untuk **setiap input** memanggil `chain.get_tx()` yang mem-parse ulang blok penampung → biaya melonjak eksponensial seiring chain tumbuh. Ditambah `mempool.to_json()` penuh.
-- **Serangan:** `while true; curl /address/ori1...` → CPU 100% permanen, node tak merespons. `/validate/` (full replay ECDSA) juga terbuka.
-- **Rencana fix:** Index alamat→txid in-memory (dibangun saat rebuild state), endpoint berat dilindungi token + rate-limit middleware.
+- **Issue:** This public endpoint iterates over **all blocks**, and for **every input** calls `chain.get_tx()` which re-parses the containing block, meaning cost grows exponentially as the chain grows. Plus `mempool.to_json()` is heavy.
+- **Attack:** `while true; curl /address/ori1...` causes permanent 100% CPU, node unresponsiveness. `/validate/` (full ECDSA replay) is also exposed.
+- **Fix plan:** In-memory address->txid index (built during state rebuild), heavy endpoints protected by token + rate-limit middleware.
 
-### C-07. `pending_children` Tanpa Batas — Memory Leak Sengaja Bisa Dipicu
+### C-07. Unbounded `pending_children` (Intentional Memory Leak)
 - **File:** `node.py:306` (`peer.pending_children[block_hash] = parent`)
-- **Masalah:** Blok orphan dicatat dalam dict per-peer **tanpa cap dan tanpa expiry**.
-- **Serangan:** Peer jahat kirim 1 juta blok "unknown parent" → dict membengkak tanpa batas → OOM.
-- **Rencana fix:** Cap 128 entri + buang terlama (FIFO).
+- **Issue:** Orphan blocks are tracked in a per-peer dictionary **without cap and expiry**.
+- **Attack:** Malicious peer sends 1 million "unknown parent" blocks, dictionary bloats indefinitely causing OOM.
+- **Fix plan:** Cap 128 entries + discard oldest (FIFO).
 
-### C-08. Race Condition GUI ↔ Node pada State Bersama
-- **File:** `utxo.py` (tanpa lock sama sekali), `chain.py:554-556` (`get_tx` baca `tx_index` tanpa lock)
-- **Masalah:** Thread polling Qt (tiap 1s) mengiterasi `UTXOSet._entries` dan `tx_index` bersamaan dengan thread P2P/miner yang memutasi → `RuntimeError: dictionary changed size during iteration`, saldo salah sesaat, crash UI saat sync.
-- **Rencana fix:** Lock internal UTXOSet + `get_tx`/`tip()` ambil lock; index per-address untuk performa.
+### C-08. GUI <-> Node Race Condition on Shared State
+- **File:** `utxo.py` (no locks at all), `chain.py:554-556` (`get_tx` reads `tx_index` without lock)
+- **Issue:** Qt polling thread (every 1s) iterates `UTXOSet._entries` and `tx_index` concurrently with P2P/miner threads mutating them, causing `RuntimeError: dictionary changed size during iteration`, temporary balance mismatch, and UI crash during sync.
+- **Fix plan:** Internal lock for UTXOSet + `get_tx`/`tip()` acquires lock; per-address index for performance.
 
 ---
 
 ## 🟠 HIGH
 
-### H-01. BIP-34 Lemah — Coinbase Height Bisa Di-skip
+### H-01. Weak BIP-34 (Coinbase Height Can Be Skipped)
 - **File:** `chain.py:311-313`, `tx.py:146-153`
-- **Masalah:** Jika `coinbase_height()` gagal parse (scriptSig sampah), pengecekan height **dilewati** (`if h is not None`). Coinbase yang sama bisa disuntikkan di dua height berbeda → kolisi `tx_index`.
-- **Fix:** Wajibkan scriptSig coinbase encode height yang valid DAN harus == height blok (strict BIP-34).
+- **Issue:** If `coinbase_height()` fails to parse (garbage scriptSig), the height check is **skipped** (`if h is not None`). The exact same coinbase can be injected at two different heights causing a `tx_index` collision.
+- **Fix:** Require coinbase scriptSig to encode a valid height AND must == block height (strict BIP-34).
 
-### H-02. Reorg = Replay Ulang dari Genesis di Bawah Global Lock
-- **File:** `chain.py:416-469` (`_maybe_reorg` → `_rebuild_state`)
-- **Masalah:** Satu reorg = replay seluruh chain + verifikasi ECDSA semua tx, sambil memegang lock. Dengan difficulty awal rendah, penyerang murah membuat fork lebih panjang berulang kali → **node freeze berulang**. (Gabungan dengan C-01 sangat berbahaya.)
-- **Fix:** (a) cap side-branch (C-01); (b) simpan snapshot UTXO fork-point agar reorg incremental; (c) minimal: transaksi atomik storage saat reorg (hindari korup flag main jika crash).
+### H-02. Reorg Replays Everything from Genesis under Global Lock
+- **File:** `chain.py:416-469` (`_maybe_reorg` -> `_rebuild_state`)
+- **Issue:** A single reorg replays the entire chain + ECDSA verification for all txs, while holding a lock. With low initial difficulty, an attacker can cheaply create longer forks repeatedly, causing **repeated node freezes**. (Combined with C-01 it is very dangerous.)
+- **Fix:** (a) cap side-branches (C-01); (b) keep UTXO snapshot at fork-point for incremental reorg; (c) minimal: atomic storage transactions during reorg (avoid main flag corruption on crash).
 
-### H-03. `learn_peers` Tanpa Throttle → Thread Explosion
+### H-03. Unthrottled `learn_peers` (Thread Explosion)
 - **File:** `p2p.py:943-975`
-- **Masalah:** Tiap `addr` message spawn thread connect untuk 8 host baru, **tanpa rate limit global**; `known` set tumbuh tanpa batas → `peers.json` bengkak, ribuan socket connect paralel.
-- **Fix:** Cap `known` (mis. 2.500), queue connect dengan rate limiter global, batasi ukuran addr msg.
+- **Issue:** Every `addr` message spawns connection threads for 8 new hosts, **without global rate limit**; `known` set grows indefinitely causing bloated `peers.json`, and thousands of parallel connect sockets.
+- **Fix:** Cap `known` (e.g. 2,500), connect queue with global rate limiter, limit addr msg size.
 
-### H-04. `requested` Inv Tracking Bocor → Sync Macet
+### H-04. Leaky `requested` Inv Tracking (Stuck Sync)
 - **File:** `p2p.py:88-90, 320-332`
-- **Masalah:** Entry `requested` hanya dibuang saat blok/tx benar-benar tiba; jika peer diam, set mencapai cap 1000 → peer **berhenti meminta apa pun selamanya** (stuck sync).
-- **Fix:** Expiry time-based (10 menit) + pembersihan saat disconnect.
+- **Issue:** `requested` entries are only dropped when the block/tx actually arrives; if the peer is silent, the set hits the 1000 cap causing the peer to **stop requesting anything forever** (sync stuck).
+- **Fix:** Time-based expiry (10 mins) + cleanup on disconnect.
 
-### H-05. `_revalidate_mempool` Bangun Overlay Ulang per Tx
+### H-05. `_revalidate_mempool` Rebuilds Overlay per Tx
 - **File:** `node.py:330-341`
-- **Masalah:** Pasca-reorg, tiap tx memvalidasi terhadap overlay baru (clone UTXO penuh + semua output mempool) → O(N×M) verifikasi ECDSA di dalam lock. Reorg spam × mempool besar = stall panjang.
-- **Fix:** Bangun overlay **sekali**, update incrementally tiap penghapusan.
+- **Issue:** Post-reorg, every tx validates against a fresh overlay (full UTXO clone + all mempool outputs) resulting in O(N×M) ECDSA verification inside the lock. Spam reorg × huge mempool = long stall.
+- **Fix:** Build overlay **once**, update incrementally on each drop.
 
-### H-06. Polling Qt Berat di GUI Thread (UI Freeze progresif)
+### H-06. Heavy Qt Polling in GUI Thread (Progressive UI Freeze)
 - **File:** `qt/controller.py:82-84, 355-364, 324-353, 424-480`; `mempool.py:456+`
-- **Masalah:** Timer 1 detik di GUI thread menjalankan: `mempool.to_json()` **3-5×/tick** (serialisasi hex SEMUA tx sambil pegang lock mempool), balance O(total UTXO) × alamat, scan riwayat 500 blok/tick dengan `get_tx()` yang mem-parse blok utuh per input, rebuild penuh widget UI **tanpa dirty-check**, tulis meta JSON tiap perubahan.
-- **Bukti dampak:** `wallet-backup.qt.json` sudah **1,9 MB** — history meta tumbuh tanpa pruning.
-- **Fix:** Worker thread polling + snapshot dirty-check; `mempool.summary()` ringan; balance via index alamat; prune history (cap 5.000 rec); debounce save meta.
+- **Issue:** 1-second timer in GUI thread executes: `mempool.to_json()` **3-5×/tick** (hex serialization of ALL txs holding mempool lock), balance O(total UTXO) × addresses, scanning 500 block history/tick with `get_tx()` parsing full blocks per input, full UI widget rebuild **without dirty-check**, JSON meta write on every change.
+- **Impact proof:** `wallet-backup.qt.json` reached **1.9 MB** because history meta grows unpruned.
+- **Fix:** Worker thread polling + snapshot dirty-check; lightweight `mempool.summary()`; balance via address index; history prune (cap 5,000 rec); debounced meta save.
 
-### H-07. API Token Check Bocor Panjang Token
+### H-07. API Token Check Leaks Token Length
 - **File:** `api.py:62-64`
-- **Masalah:** `len(provided) != len(token)` → return cepat → timing leak panjang token.
-- **Fix:** Bandingkan digest konstan (hash kedua sisi) dengan `compare_digest`.
+- **Issue:** `len(provided) != len(token)` returning early leaks token length timing.
+- **Fix:** Compare constant digest (hash both sides) with `compare_digest`.
 
-### H-08. Fitur Ter-Limit: Mining/CLI Ditolak 403 pada Bind Publik Tanpa Token
+### H-08. Feature Limit (Mining/CLI 403 on Public Bind Without Token)
 - **File:** `api.py:49-64`, `config.py:22` (default `0.0.0.0`), `qt/controller.py:133-174`
-- **Masalah:** Default bind `0.0.0.0` + `require_api_token_when_public=True` → **endpoint `/mining/template`, `/mining/submit`, `/tx/`, `/network/addpeer` balik 403** meski akses dari localhost. Inilah "beberapa fungsi masih ter-limit" yang dirasakan. GUI Qt sendiri aman (in-process) tapi CLI wallet/miner eksternal gagal.
-- **Fix:** Qt controller defaultkan bind API ke `127.0.0.1` (aman otomatis, semua fitur lokal jalan); dokumentasikan token untuk bind publik.
+- **Issue:** Default bind `0.0.0.0` + `require_api_token_when_public=True` causes **`/mining/template`, `/mining/submit`, `/tx/`, `/network/addpeer` to return 403** even when accessed from localhost. This explains the "some features limited" feeling. Qt GUI is safe (in-process) but external CLI wallet/miner fails.
+- **Fix:** Qt controller defaults API bind to `127.0.0.1` (safe automatically, all local features work); document tokens for public binds.
 
-### H-09. Storage Reorg Tidak Atomik
+### H-09. Non-Atomic Storage Reorg
 - **File:** `storage.py:97-100`, `chain.py:458-466`
-- **Masalah:** `delete_from_height` + loop `put_block` (commit per blok). Crash di tengah → chain main terpotong tanpa pengganti → node corrupt saat restart.
-- **Fix:** Bungkus reorg dalam satu transaksi SQLite.
+- **Issue:** `delete_from_height` + loop `put_block` (commit per block). Crash in the middle severs the main chain without replacement causing corrupt node on restart.
+- **Fix:** Wrap reorg in a single SQLite transaction.
 
 ---
 
 ## 🟡 MEDIUM
 
-### M-01. Bug Index Bucket Paralel Sync
-- **File:** `p2p.py:1190-1193` — `buckets.index(bucket)` mengambil bucket pertama yang sama (bukan indeks loop aktual) → permintaan blok bisa dikirim ke peer yang salah / duplikat. Fix: `enumerate`.
+### M-01. Parallel Sync Bucket Index Bug
+- **File:** `p2p.py:1190-1193` `buckets.index(bucket)` gets the first identical bucket (not actual loop index) causing block requests sent to wrong/duplicate peers. Fix: `enumerate`.
 
-### M-02. Konsol Duplikat & Dead Code
-- `qt/controller.py:783-891` `debug_command()` lengkap tapi **tidak pernah dipanggil**; `qt/dialogs.py:473-646` punya dispatcher sendiri yang berbeda → dua set perintah tidak konsisten. Fix: satukan via controller.
+### M-02. Duplicate Console & Dead Code
+- `qt/controller.py:783-891` `debug_command()` is complete but **never called**; `qt/dialogs.py:473-646` has its own different dispatcher resulting in inconsistent commands. Fix: unify via controller.
 
-### M-03. Lock/Unlock Wallet Tak Terhubung UI
-- `qt/controller.py:610-630` (`lock_wallet`/`unlock_wallet`/re-encrypt) tidak ada menu pemanggil. Tidak ada auto-lock timeout ala `walletpassphrase <timeout>`.
+### M-03. Lock/Unlock Wallet Not Linked to UI
+- `qt/controller.py:610-630` (`lock_wallet`/`unlock_wallet`/re-encrypt) has no caller menu. No auto-lock timeout like `walletpassphrase <timeout>`.
 
-### M-04. ETA Mempool Hardcode Tier 5
-- `qt/dialogs.py:102-104` — estimasi konfirmasi selalu pakai tier 5 walau fee tx berbeda.
+### M-04. Hardcoded Tier 5 Mempool ETA
+- `qt/dialogs.py:102-104` confirmation estimate always uses tier 5 despite actual tx fee.
 
-### M-05. URI Payment Request Tidak URL-encoded
-- `qt/receive_page.py:136-145` — label/message mentah → karakter `&`, spasi merusak URI.
+### M-05. Payment Request URI Not URL-encoded
+- `qt/receive_page.py:136-145` raw label/message where `&` and spaces break the URI.
 
-### M-06. Address Book Hilang Saat Load Wallet File
-- `qt/controller.py:640-647` reset meta tanpa key `address_book` → kontak lenyap diam-diam.
+### M-06. Address Book Lost on Wallet File Load
+- `qt/controller.py:640-647` resets meta without `address_book` key causing silent contact deletion.
 
-### M-07. Basis Difficulty Display Tidak Konsisten
-- `chain.py:509-516` (`tip()`: base=MAX_TARGET) vs `chain.py:493-496` (`template()`: base=initial_zeros) → angka difficulty beda antar tampilan. Samakan ke initial-zeros target.
+### M-07. Inconsistent Difficulty Base Display
+- `chain.py:509-516` (`tip()`: base=MAX_TARGET) vs `chain.py:493-496` (`template()`: base=initial_zeros) results in different difficulty numbers. Unify to initial-zeros target.
 
 ---
 
-## ⚪ LOW / CATATAN DESAIN
+## ⚪ LOW / DESIGN NOTES
 
-| # | Temuan |
+| # | Finding |
 |---|---|
-| L-01 | `cmd_bump_fee` CLI stub mati (`wallet.py:647-684`) — selalu exit error. |
-| L-02 | Sighash memakai SATU digest untuk semua input (commit ke outpoint kolektif, non-standard tapi aman terhadap replay lintas-tx). Dokumentasikan. |
-| L-03 | `_app_ref` dead reference (`qt/mainwindow.py:232`); import dialog tak terpakai (`mainwindow.py:25-30`). |
-| L-04 | uvicorn tidak pernah shutdown bersih (`should_exit` tak pernah diset) — port tergantung sampai proses mati (`qt/controller.py:176-183`). |
-| L-05 | Version string hardcode di console (`dialogs.py:517`) padahal `api.VERSION` ada. |
-| L-06 | Mempool penuh = reject, bukan evict low-fee (Bitcoin Core meng-evict). Perbaikan policy. |
+| L-01 | `cmd_bump_fee` CLI stub is dead (`wallet.py:647-684`), always exits with error. |
+| L-02 | Sighash uses ONE digest for all inputs (collective outpoint commit, non-standard but safe against cross-tx replay). Document it. |
+| L-03 | `_app_ref` dead reference (`qt/mainwindow.py:232`); unused dialog import (`mainwindow.py:25-30`). |
+| L-04 | uvicorn never shuts down cleanly (`should_exit` never set), port hangs until process dies (`qt/controller.py:176-183`). |
+| L-05 | Version string hardcoded in console (`dialogs.py:517`) despite `api.VERSION` existing. |
+| L-06 | Full mempool = reject, instead of low-fee evict (Bitcoin Core evicts). Policy improvement. |
 
 ---
 
-## ✅ YANG SUDAH BAIK (pertahankan)
+## ✅ WHAT'S ALREADY GOOD (Keep)
 
-- PoW + retarget Digishield-median dengan clamp [¼,4] dan window dari parent lineage (`pow.py`, `chain.py:156-187`).
-- Median-time-past 11 blok + future limit (`chain.py:371-383`).
-- Non-canonical varint ditolak (`utils.py:50-76`); trailing bytes ditolak di semua parser.
+- PoW + Digishield-median retarget with [¼,4] clamp and parent lineage window (`pow.py`, `chain.py:156-187`).
+- 11-block median-time-past + future limit (`chain.py:371-383`).
+- Non-canonical varint rejection (`utils.py:50-76`); trailing bytes rejected in all parsers.
 - Low-S enforcement + deterministic RFC6979 signing (`crypto.py`).
 - Coinbase maturity + activation height (`utxo.py:39-46`, `chain.py:220-227`).
 - Duplicate-input check, overspend check, duplicate-txid-in-block check.
-- AssumeValid bergaya Core dengan syarat depth (`chain.py:255-293`).
-- Token bucket pacing P2P tanpa hard-disconnect; ban score per-perilaku; subnet diversity.
-- Wallet AES-256-GCM + PBKDF2 600k iterasi + atomic write (`wallet.py`).
-- Bech32 validasi hrp+witver+len (`bech32.py`).
+- Core-style AssumeValid with depth requirements (`chain.py:255-293`).
+- Token bucket P2P pacing without hard-disconnect; per-behavior ban score; subnet diversity.
+- Wallet AES-256-GCM + PBKDF2 600k iterations + atomic write (`wallet.py`).
+- Bech32 hrp+witver+len validation (`bech32.py`).
 
 ---
 
-## 🎯 RENCANA PERBAIKAN BESAR-BESARAN (eksekusi berikutnya)
+## 🎯 MASSIVE IMPROVEMENT PLAN (Next Execution)
 
-### Fase 1 — Consensus & DoS hardening
+### Phase 1: Consensus & DoS hardening
 1. `mempool.remove_spent` cascade descendants (C-02) + evict policy (L-06)
 2. `ordered_with_fees` heap-based (C-03) + cache vsize
-3. Side-branch cap + pruning (C-01) + reorg transaksional (H-09, H-02)
-4. BIP-34 strict (H-01)
-5. UTXOSet locking + address index (C-08, bagian C-06)
+3. Side-branch cap + pruning (C-01) + transactional reorg (H-09, H-02)
+4. Strict BIP-34 (H-01)
+5. UTXOSet locking + address index (C-08, part of C-06)
 
-### Fase 2 — P2P & API hardening
+### Phase 2: P2P & API hardening
 6. Handshake gate (C-05), `requested` expiry (H-04), learn_peers throttle (H-03), pending_children cap (C-07), bucket index fix (M-01)
 7. Streaming reply_blocks/reply_headers + window walk-back (C-04)
-8. Address history via index + protect endpoint berat + rate-limit middleware (C-06)
-9. Token compare constant-length (H-07); QT default bind loopback (H-08)
+8. Address history via index + protect heavy endpoints + rate-limit middleware (C-06)
+9. Constant-length token compare (H-07); QT loopback default bind (H-08)
 
-### Fase 3 — Qt Wallet overhaul ("90% Bitcoin Core")
-10. Polling worker-thread + adaptive interval + dirty-check UI (H-06)
+### Phase 3: Qt Wallet overhaul ("90% Bitcoin Core")
+10. Polling worker-thread + adaptive interval + UI dirty-check (H-06)
 11. Meta pruning + debounced save (H-06)
-12. Menu Wallet: **Lock/Unlock (+auto-lock timer)**, **Change Passphrase**, **Sign/Verify Message**, **Export CSV**, **Dump Private Key**
-13. Console disatukan ke `debug_command` (M-02) + perintah wallet
+12. Wallet Menu: **Lock/Unlock (+auto-lock timer)**, **Change Passphrase**, **Sign/Verify Message**, **Export CSV**, **Dump Private Key**
+13. Unified console to `debug_command` (M-02) + wallet commands
 14. Peers dialog: **Disconnect/Ban per peer**; Options dialog editable (default fee tier, rescan)
-15. Receive page: QR inline + URI encoded (M-05); ETA tier nyata (M-04); address book persist fix (M-06)
+15. Receive page: Inline QR + URL-encoded URI (M-05); actual tier ETA (M-04); address book persist fix (M-06)
 
-### Verifikasi
-16. Test suite existing + test serangan baru harus lulus semua.
-
+### Verification
+16. Existing test suite + new attack tests must all pass.
 
 ---
 
-## ✅ STATUS PERBAIKAN (eksekusi selesai)
+## ✅ FIX STATUS (Execution Complete)
 
-| Kode | Fix | Lokasi |
+| Code | Fix | Location |
 |---|---|---|
-| C-01 | Cap side-branch 512 + FIFO eviction | `chain.py:_maybe_reorg`, `storage.py:side_count/oldest_side_hashes/delete_by_hashes`, `config.py:max_side_branch_blocks` |
-| C-02 | Cascade-evict orphaned descendants saat remove_spent (+chain resolver) | `mempool.py:remove_spent/_evict_orphans_locked`, `node.py` |
-| C-03 | Template selection heap-based O(N log N) + cache vsize | `mempool.py:ordered_with_fees` — **46s→18ms @8k tx** |
+| C-01 | Side-branch cap 512 + FIFO eviction | `chain.py:_maybe_reorg`, `storage.py:side_count/oldest_side_hashes/delete_by_hashes`, `config.py:max_side_branch_blocks` |
+| C-02 | Cascade-evict orphaned descendants on remove_spent (+chain resolver) | `mempool.py:remove_spent/_evict_orphans_locked`, `node.py` |
+| C-03 | Heap-based template selection O(N log N) + cache vsize | `mempool.py:ordered_with_fees` (46s -> 18ms @8k tx) |
 | C-04 | reply_blocks/reply_headers streaming by-height; on_peer_headers walk-back ≤60 | `p2p.py` |
-| C-05 | Handshake gate (hanya version/ping/pong pra-verack) | `p2p.py:_dispatch` |
-| C-06 | `/address/` via addr_index in-memory O(history); `/validate/` token+rate-limit; rate-limit middleware per-endpoint | `chain.py:addr_index/out_addr_map/address_history`, `api.py` |
+| C-05 | Handshake gate (only version/ping/pong pre-verack) | `p2p.py:_dispatch` |
+| C-06 | `/address/` via in-memory addr_index O(history); `/validate/` token+rate-limit; per-endpoint rate-limit middleware | `chain.py:addr_index/out_addr_map/address_history`, `api.py` |
 | C-07 | pending_children cap 128 FIFO | `node.py:on_peer_block_hex` |
-| C-08 | RLock di UTXOSet + index per-address; get_tx ber-lock | `utxo.py`, `chain.py:get_tx` |
-| H-01 | Strict BIP-34: coinbase height wajib ter-parse == height | `chain.py:_apply_block_to_utxo` |
-| H-03 | learn_peers throttle global + cap known 2500 + cap addr msg 64 | `p2p.py:learn_peers` |
-| H-04 | requested inv expiry 10 menit (anti sync-wedge) | `p2p.py:_prune_requested` |
-| H-05 | _revalidate_mempool overlay sekali + incremental drop subtree | `node.py` |
-| H-06 | Qt polling ringan: summary() tanpa hex ×7 titik, dirty-check snapshot, adaptive interval 1s↔3s, meta prune 5000 rec + debounced save 30s | `qt/controller.py`, `mempool.py:summary()` |
-| H-07 | Token compare pakai sha256-digest constant-length | `api.py:_check_api_token` |
-| H-08 | Qt embed API default bind loopback → CLI/miner lokal tak lagi 403 | `qt/controller.py:_start_api` |
-| H-09 | Reorg atomik satu transaksi SQLite (`reorg_apply`) | `storage.py`, `chain.py` |
-| M-01 | buckets.index() bug → enumerate | `p2p.py:_request_blocks_parallel` |
-| M-02 | Console disatukan ke `controller.debug_command` (+alias legacy, +perintah wallet) | `qt/controller.py`, `qt/dialogs.py` |
+| C-08 | RLock on UTXOSet + per-address index; locked get_tx | `utxo.py`, `chain.py:get_tx` |
+| H-01 | Strict BIP-34: coinbase height must parse == height | `chain.py:_apply_block_to_utxo` |
+| H-03 | Global learn_peers throttle + cap known 2500 + cap addr msg 64 | `p2p.py:learn_peers` |
+| H-04 | requested inv expiry 10 mins (anti sync-wedge) | `p2p.py:_prune_requested` |
+| H-05 | One-time _revalidate_mempool overlay + incremental subtree drop | `node.py` |
+| H-06 | Lightweight Qt polling: summary() without hex ×7 places, dirty-check snapshot, adaptive interval 1s<->3s, prune meta 5000 rec + 30s debounced save | `qt/controller.py`, `mempool.py:summary()` |
+| H-07 | Token compare using constant-length sha256-digest | `api.py:_check_api_token` |
+| H-08 | Qt embed API default loopback bind (CLI/local miner no longer 403) | `qt/controller.py:_start_api` |
+| H-09 | Single SQLite transaction atomic reorg (`reorg_apply`) | `storage.py`, `chain.py` |
+| M-01 | buckets.index() bug -> enumerate | `p2p.py:_request_blocks_parallel` |
+| M-02 | Unified console to `controller.debug_command` (+legacy alias, +wallet commands) | `qt/controller.py`, `qt/dialogs.py` |
 | M-03 | Lock/Unlock Wallet menu + auto-lock timer (walletpassphrase-style) | `qt/mainwindow.py`, `qt/controller.py` |
-| M-04 | ETA TxDetail dari fee-rate aktual tx | `qt/dialogs.py` |
-| M-05 | URI payment request URL-encoded + QR inline di Receive page | `qt/receive_page.py` |
-| M-06 | address_book dipertahankan lintas load wallet file; hrp konsisten | `qt/controller.py`, `qt/wallet_dialogs.py` |
-| L-03/L-04 | `_app_ref` dibuang; uvicorn shutdown bersih (`should_exit`) | `qt/mainwindow.py`, `qt/controller.py` |
-| L-06 | Mempool penuh → evict lowest-rate (Bitcoin Core policy) | `mempool.py:_evict_one_locked` |
+| M-04 | TxDetail ETA from actual tx fee-rate | `qt/dialogs.py` |
+| M-05 | URL-encoded payment request URI + inline QR in Receive page | `qt/receive_page.py` |
+| M-06 | Persisted address_book across wallet file loads; consistent hrp | `qt/controller.py`, `qt/wallet_dialogs.py` |
+| L-03/04 | `_app_ref` removed; clean uvicorn shutdown (`should_exit`) | `qt/mainwindow.py`, `qt/controller.py` |
+| L-06 | Full mempool -> evict lowest-rate (Bitcoin Core policy) | `mempool.py:_evict_one_locked` |
 
-### Fitur baru Qt Wallet (paritas Bitcoin Core)
+### New Qt Wallet Features (Bitcoin Core Parity)
 - 🔒 Lock/Unlock Wallet + auto-lock timeout (menu & console)
-- 🔁 Change Passphrase (verifikasi passphrase lama)
-- ✍️ Sign Message / ✔️ Verify Message (ECDSA pubkey-recovery manual — bekerja utk alamat siapa pun)
+- 🔁 Change Passphrase (verify old passphrase)
+- ✍️ Sign Message / ✔️ Verify Message (manual ECDSA pubkey-recovery, works for any address)
 - 📄 Export transaction history CSV
-- 🔑 Dump private key (dengan warning + auto-copy)
+- 🔑 Dump private key (with warning + auto-copy)
 - 🔎 Rescan blockchain from height
 - 🖧 Peers dialog: Disconnect selected
-- 🖼️ QR code inline di halaman Receive
-- 🖥️ Console terpadu (getinfo/getblock/gettransaction/signmessage/dumpprivkey/exportcsv/rescan/bumpfee/difficulty dll.)
+- 🖼️ Inline QR code on Receive page
+- 🖥️ Unified console (getinfo/getblock/gettransaction/signmessage/dumpprivkey/exportcsv/rescan/bumpfee/difficulty etc.)
 
-### Test suite
-| Suite | Hasil |
+### Test Suite
+| Suite | Result |
 |---|---|
-| `pytest tests` (incl. `test_vuln_fixes.py` baru — regresi tiap kerentanan) | **24 passed** |
-| `tests/attack_sim.py` (22 serangan) | **0 VULNERABLE**, E2E transfer OK, reorg jujur OK |
-| `tests/qt_smoke.py` (boot headless + fitur baru) | **QT_SMOKE_OK** |
+| `pytest tests` (incl. new `test_vuln_fixes.py` regressing each vuln) | **24 passed** |
+| `tests/attack_sim.py` (22 attacks) | **0 VULNERABLE**, E2E transfer OK, honest reorg OK |
+| `tests/qt_smoke.py` (headless boot + new features) | **QT_SMOKE_OK** |
 
 ---
 
-## 💡 JAWABAN FEASIBILITY: SMART CONTRACT
+## 💡 FEASIBILITY ANSWER: SMART CONTRACT
 
-**Ya, bisa — dengan pendekatan bertahap.** Chain Anda sudah punya fondasi yang tepat:
-script_pubkey per-output (saat ini hanya alamat bech32 polos), sighash framework, dan block gas-free deterministik.
+**Yes, it is feasible through a phased approach.** Your chain already has the right foundation:
+per-output script_pubkey (currently just bare bech32 addresses), a sighash framework, and deterministic gas-free blocks.
 
-Tiga opsi (detail teknis di akhir sesi kerja):
-1. **OP-code mini-script (paling realistis):** tambahkan interpreter stack kecil (mis. OP_ADD/LT/EQ/MULTISIG/CLTV) pada script_pubkey — gaya Bitcoin Script sederhana. Perubahan lokal di `tx.py` + validator baru; soft-fork via activation height (pola `low_s_activation_height` sudah ada sebagai template).
-2. **Account-layer paralel (EVM-sidecar):** jalankan EVM (py-evm) sebagai sidecar; anchor state-root tiap N blok ke coinbase/block header. Kompleks sedang, kompatibel tooling Solidity.
-3. **UTXO+state-cell (ala Nervos/CKB):** generalisasi output jadi "cell" dengan data+type-script. Paling bersih secara arsitektur tapi refactor besar.
+Three options (technical details at the end of the session):
+1. **OP-code mini-script (most realistic):** add a small stack interpreter (e.g. OP_ADD/LT/EQ/MULTISIG/CLTV) on script_pubkey (simple Bitcoin Script style). Localized changes in `tx.py` + new validator; soft-fork via activation height (the `low_s_activation_height` pattern is already there as a template).
+2. **Parallel Account-layer (EVM-sidecar):** run EVM (py-evm) as a sidecar; anchor state-root every N blocks to coinbase/block header. Medium complexity, compatible with Solidity tooling.
+3. **UTXO+state-cell (Nervos/CKB style):** generalize output into "cells" with data+type-script. Architecturally cleanest but requires massive refactor.
 
-Rekomendasi: **Opsi 1** dulu (2–4 minggu kerja), karena tidak mengubah model UTXO, bisa diaktifkan per-height, dan risiko konsensus minim. Opsi 2 jika butuh Solidity.
+Recommendation: **Option 1** first (2-4 weeks of work), since it does not change the UTXO model, can be activated per-height, and has minimal consensus risk. Option 2 if Solidity is strictly needed.
 
 ---
 
-## 🔄 AUDIT ROUND 2 — 2026-08-26
+## 🔄 AUDIT ROUND 2 (2026-08-26)
 
-Audit mendalam kedua mencakup: konsensus checkpoint, pool server fee ledger, dan deprecasi API.
+Second deep audit covers: consensus checkpoints, pool server fee ledger, and API deprecations.
 
-### Temuan Baru
+### New Findings
 
-| Kode | Severity | Masalah | Status |
+| Code | Severity | Issue | Status |
 |---|---|---|---|
-| **N-01** | 🟡 MEDIUM | `pool_server.py` menggunakan `@app.on_event("startup")` yang sudah deprecated di FastAPI | ✅ **FIXED** — migrasi ke `lifespan` context manager |
-| **N-02** | 🟠 HIGH | `credit_block()` float `net` → truncation integer menyebabkan dust sats **hilang** (tidak dikreditkan ke siapa pun, tidak juga ke pool address) | ✅ **FIXED** — `net = int(...)`, dust remainder dikreditkan ke pool address balance |
-| **N-03** | 🟡 MEDIUM | Checkpoint dictionary dari `config.json` memiliki key **string** (JSON tidak support integer key), sehingga `height in cfg.checkpoints` selalu False → checkpoint tidak pernah di-enforce jika dikonfigurasi dari file | ✅ **FIXED** — `{int(k): v for k, v in ...}` saat parse di `Config.from_env()` |
-| **N-04** | ✅ OK | Validasi coinbase split (2 output: miner + fee_address): `cb_value = sum(o.value for o in coinbase.outputs)` sudah benar — menjumlahkan semua output termasuk fee | Tidak ada bug |
+| **N-01** | 🟡 MEDIUM | `pool_server.py` uses `@app.on_event("startup")` which is deprecated in FastAPI | ✅ **FIXED** (migrated to `lifespan` context manager) |
+| **N-02** | 🟠 HIGH | `credit_block()` float `net` integer truncation causes dust sats to be **lost** (credited to no one, not even the pool address) | ✅ **FIXED** (`net = int(...)`, dust remainder credited to pool address balance) |
+| **N-03** | 🟡 MEDIUM | Checkpoint dictionary from `config.json` has **string** keys (JSON lacks integer keys), making `height in cfg.checkpoints` always False (file-configured checkpoints are never enforced) | ✅ **FIXED** (`{int(k): v for k, v in ...}` on parse in `Config.from_env()`) |
+| **N-04** | ✅ OK | Coinbase split validation (2 outputs: miner + fee_address): `cb_value = sum(o.value for o in coinbase.outputs)` is correct (sums all outputs including fee) | No bug |
 
-### Ringkasan Perubahan Round 2
+### Round 2 Change Summary
 
-- **`pool_server.py`**: Migrasi ke lifespan, fix dust rounding di `credit_block()`
-- **`config.py`**: Fix checkpoint key type — integer coercion saat parse
-- **`chain.py`**: Tambah enforcement checkpoint saat `add_block()`
-- **`tests/test_new_findings.py`**: 5 test baru untuk N-01..N-04
+- **`pool_server.py`**: Migrated to lifespan, fixed dust rounding in `credit_block()`
+- **`config.py`**: Fixed checkpoint key type (integer coercion on parse)
+- **`chain.py`**: Added checkpoint enforcement during `add_block()`
+- **`tests/test_new_findings.py`**: 5 new tests for N-01..N-04
 
-### Hasil Test Round 2
+### Round 2 Test Results
 
-| Suite | Hasil |
+| Suite | Result |
 |---|---|
-| `pytest tests` (29 tests total termasuk 5 test baru) | **29 passed** |
-| `tests/attack_sim.py` (22 serangan) | **0 VULNERABLE** |
+| `pytest tests` (29 tests total including 5 new tests) | **29 passed** |
+| `tests/attack_sim.py` (22 attacks) | **0 VULNERABLE** |
 
-### Hasil Simulasi Serangan (Attack Sim) Round 2
+### Attack Simulation Results (Round 2)
 
 ```
 TOTAL: 22  |  DEFENDED/OK: 20  |  PERF probes: 2  |  VULNERABLE: 0
 ```
 
-Semua serangan berhasil ditangkis. Tidak ada regresi.
+All attacks successfully defended. No regressions.
 
 ---
-*Audit Round 2 selesai 2026-08-26. Kode siap untuk deployment.*
+*Round 2 Audit completed 2026-08-26. Code is ready for deployment.*
