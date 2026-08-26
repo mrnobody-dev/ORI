@@ -6,10 +6,6 @@ echo ===========================================================================
 echo                            ORI PPLNS MINING POOL
 echo                                (SHA-256d PoW)
 echo ===============================================================================
-echo.
-echo Welcome to the Official ORI Mining Pool!
-echo Dashboard: https://ori-production-8364.up.railway.app/
-echo.
 echo Make sure 'miner-ori.exe' is located in this directory.
 echo If you don't have it, download from: https://github.com/mrnobody-dev/ORI/releases
 echo.

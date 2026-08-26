@@ -54,19 +54,49 @@ python qt_app.py
 
 ---
 
-## ⛏️ Mining
+## ⛏️ Mining Tutorial
 
-You can mine ORI either solo or via a PPLNS mining pool. Start your node (`python qt_app.py`), then use the bundled miner.
+ORI is highly optimized for CPU mining (SHA-256d). You can mine **Solo** (directly to your own node) or connect to a **PPLNS Pool** (mining with others to share rewards).
 
-**Solo Mining:**
+### Option 1: Mining on Windows (Easy Mode)
+If you downloaded the Windows `.zip` release, you already have everything you need!
+1. Open the folder where you extracted ORI.
+2. Double-click the file named `CPU miner launcher.bat`.
+3. Paste your ORI wallet address and choose how many CPU threads to use.
+4. The miner will automatically connect to the Official Pool and start hashing!
+
+### Option 2: Mining from Source Code
+If you are running from source, start your local node first (`python qt_app.py`), then open a new terminal:
+
+**Solo Mining (Requires a synced local node):**
 ```bash
 python miner.py --address ori1YOUR_ADDRESS --threads 4
 ```
 
 **Pool Mining (PPLNS):**
 ```bash
-python miner.py --address ori1YOUR_ADDRESS --host pool.ori-network.com --port 443 --https --pool --threads 4
+python miner.py --address ori1YOUR_ADDRESS --host ori-production-8364.up.railway.app --port 443 --https --pool --threads 4
 ```
+
+---
+
+## 🔗 Connecting Nodes (P2P Network)
+
+By default, an ORI node attempts to connect to the hardcoded DNS seed to find other peers. However, if you are setting up a private network or want to manually connect to a specific node, you can do so using the `config.json` file.
+
+1. In the same directory as your `ORICore.exe` or source code, create a file named `config.json`.
+2. Add the `seed_peers` array pointing to the IP addresses or domains of the target nodes.
+
+**Example `config.json`:**
+```json
+{
+  "seed_peers": [
+    "ori-production-8364.up.railway.app",
+    "192.168.1.100"
+  ]
+}
+```
+3. Restart your node. It will now force a P2P connection to the specified peers on port `8033`.
 
 ---
 
