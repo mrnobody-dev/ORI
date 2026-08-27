@@ -321,8 +321,41 @@ class Peer(threading.Thread):
             node = self.network.node
             peer_genesis = data.get("genesis")
             if peer_genesis and peer_genesis != node.chain.genesis_hash():
+                peer_config = data.get("genesis_config", {})
+                local_config = {
+                    "block_reward_sats": node.cfg.block_reward_sats,
+                    "halving_interval": node.cfg.halving_interval,
+                    "block_time_seconds": node.cfg.block_time_seconds,
+                    "initial_zeros": node.cfg.initial_zeros,
+                    "coinbase_maturity": node.cfg.coinbase_maturity,
+                    "network_hrp": node.cfg.network_hrp,
+                    "coinbase_note": node.cfg.coinbase_note,
+                }
+                mismatches = []
+                for key, local_val in local_config.items():
+                    peer_val = peer_config.get(key)
+                    if peer_val is not None and peer_val != local_val:
+                        mismatches.append(f"{key}: local={local_val} peer={peer_val}")
                 self.disconnect_reason = "chain mismatch (genesis)"
+                if mismatches:
+                    logger.warn(
+                        LogCategory.P2P,
+                        "Genesis mismatch — consensus config differs",
+                        peer=_peer_label(self.addr),
+                        mismatches=mismatches,
+                        local_genesis=node.chain.genesis_hash(),
+                        peer_genesis=peer_genesis,
+                    )
+                else:
+                    logger.warn(
+                        LogCategory.P2P,
+                        "Genesis mismatch — same config params but different genesis (check GENESIS_TIMESTAMP?)",
+                        peer=_peer_label(self.addr),
+                        local_genesis=node.chain.genesis_hash(),
+                        peer_genesis=peer_genesis,
+                    )
                 raise ValueError("chain mismatch (genesis)")
+            # Genesis matches — proceed with handshake
             self.height = int(data.get("height", -1))
             self.peer_best = data.get("best_hash")
             self.ua = data.get("ua", "unknown")
@@ -455,6 +488,15 @@ class Peer(threading.Thread):
             "height": node.chain.storage.height(),
             "best_hash": node.chain.tip()["hash"],
             "genesis": node.chain.genesis_hash(),
+            "genesis_config": {
+                "block_reward_sats": node.cfg.block_reward_sats,
+                "halving_interval": node.cfg.halving_interval,
+                "block_time_seconds": node.cfg.block_time_seconds,
+                "initial_zeros": node.cfg.initial_zeros,
+                "coinbase_maturity": node.cfg.coinbase_maturity,
+                "network_hrp": node.cfg.network_hrp,
+                "coinbase_note": node.cfg.coinbase_note,
+            },
             "ua": "ORI/0.2",
         }
         self.send("version", json.dumps(data).encode())

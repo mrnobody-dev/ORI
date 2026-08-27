@@ -444,8 +444,12 @@ def _parse_header(header_hex: str):
 
 
 def _expected_merkle(job: dict) -> bytes:
-    """Recompute the merkle root a miner must produce for `job`."""
-    cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
+    """Recompute the merkle root a miner must produce for `job`.
+    
+    Coinbase pays POOL_ADDRESS directly (no fee split in coinbase).
+    Pool fee is handled separately during reward distribution.
+    """
+    cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
     txids = [cb.txid()]
     for hx in job.get("txs", []):
         from tx import Transaction
@@ -623,7 +627,9 @@ def pool_submit(body: SubmitReq):
         from block import Block, BlockHeader
         from tx import Transaction
 
-        cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
+        # Coinbase pays POOL_ADDRESS directly (no fee split in coinbase).
+        # Pool fee is handled separately during reward distribution.
+        cb = coinbase_tx(int(job["height"]), int(job["reward_sats"]), POOL_ADDRESS)
         txs = [cb] + [Transaction.from_hex(hx) for hx in job.get("txs", [])]
         hdr = BlockHeader(version=version, prev_hash=prev_hash, merkle_root=merkle,
                           timestamp=ts, bits=bits, nonce=nonce)

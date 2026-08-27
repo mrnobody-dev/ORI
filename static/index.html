@@ -163,7 +163,7 @@ footer a { color: var(--accent); font-weight: 600; }
 </head>
 <body>
 <header>
-  <a href="#/" class="logo" style="text-decoration:none; color:inherit;">ORI <b>&#9671; Explorer</b> <span>2026</span></a>
+  <a href="#/" class="logo" style="text-decoration:none; color:inherit;">ORI <b>&#9671; Explorer</b></a>
   <nav id="nav">
     <a href="#/" data-nav="home">Home</a>
     <a href="#/blocks" data-nav="blocks">Blocks</a>
@@ -179,7 +179,7 @@ footer a { color: var(--accent); font-weight: 600; }
 </header>
 <div id="banner"></div>
 <main id="sub"></main>
-<footer>ORI Network Explorer &copy; 2026 &mdash; Built on Python. API available at <a href="/docs" target="_blank">/docs</a></footer>
+<footer>ORI Network Explorer &mdash; Built on Python. API available at <a href="/docs" target="_blank">/docs</a></footer>
 <script>
 "use strict";
 const API = new URLSearchParams(location.search).get("node") || "";
@@ -200,7 +200,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const COIN = 100000000;
-const state = {tip:-1, reward:4628000000, halving:2102400, timer:null};
+const state = {tip:-1, reward:null, halving:null, timer:null};
 
 const targetFromBits = bits => {
   const exponent = (bits >>> 24) & 0xFF;
@@ -229,7 +229,11 @@ const age = ts => {
   return Math.floor(s/86400) + "d ago";
 };
 const fmtTime = ts => new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "medium" });
-const rewardAt = h => Math.floor((state.reward || 4628000000) / Math.pow(2, Math.min(63, Math.floor(h / (state.halving || 2102400)))));
+const rewardAt = h => {
+  const r = state.reward ?? 612073980;
+  const hv = state.halving ?? 30143415;
+  return Math.floor(r / Math.pow(2, Math.min(63, Math.floor(h / hv))));
+};
 
 async function api(path){
   const r = await fetch(API + path, {headers:{"Accept":"application/json"}});

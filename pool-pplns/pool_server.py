@@ -117,9 +117,14 @@ def _job_id(height: int, prev_hash: str) -> str:
 
 
 def _expected_merkle(height: int, reward_sats: int, txs: list) -> bytes | None:
-    """Pre-compute the merkle root the miner MUST produce for a valid share."""
+    """Pre-compute the merkle root the miner MUST produce for a valid share.
+    
+    Note: Coinbase pays POOL_ADDRESS directly (no fee split in coinbase).
+    Pool fee is deducted during PPLNS payout distribution, not in the coinbase.
+    This matches the node's template behavior where coinbase pays miner address directly.
+    """
     try:
-        cb = coinbase_tx(height, reward_sats, POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
+        cb = coinbase_tx(height, reward_sats, POOL_ADDRESS)
         txid_list = [cb.txid()]
         for tx_hex in txs:
             txid_list.append(Transaction.from_hex(tx_hex).txid())
@@ -261,7 +266,9 @@ def _validate(job: dict, header_hex: str, worker: str):
 def _submit_block(job: dict, header_hex: str) -> tuple[bool, int, str]:
     """Build full block bytes from job + header and submit to node."""
     hdr = bytes.fromhex(header_hex)
-    cb  = coinbase_tx(job["height"], job["reward_sats"], POOL_ADDRESS, fee_address=POOL_FEE_ADDRESS, fee_pct=POOL_FEE_PCT)
+    # Coinbase pays POOL_ADDRESS directly (no fee split in coinbase).
+    # Pool fee is deducted during PPLNS payout distribution.
+    cb  = coinbase_tx(job["height"], job["reward_sats"], POOL_ADDRESS)
     all_txs = [cb]
     for tx_hex in job.get("txs", []):
         try:

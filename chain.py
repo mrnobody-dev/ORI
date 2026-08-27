@@ -56,6 +56,29 @@ class Blockchain:
         row = self.storage.block_by_height(0)
         return row["hash"] if row else None
 
+    @staticmethod
+    def compute_genesis_hash(cfg: Config) -> str:
+        """Compute the expected genesis hash for a given config.
+        
+        Useful for verifying that two nodes have compatible consensus parameters
+        without needing to connect or have a chain database.
+        """
+        bits = bits_for_zeros(cfg.initial_zeros)
+        no_premine = bech32_encode(cfg.network_hrp, 0, b"\x00" * 20)
+        coinbase = coinbase_tx(0, cfg.block_reward_sats, no_premine, cfg.coinbase_note)
+        header = BlockHeader(
+            version=1,
+            prev_hash=b"\x00" * 32,
+            merkle_root=merkle_root([coinbase.txid()]),
+            timestamp=GENESIS_TIMESTAMP,
+            bits=bits,
+            nonce=0,
+        )
+        while not hash_meets_target(header.hash(), bits):
+            header.nonce += 1
+        genesis = Block(header, [coinbase])
+        return hexstr(genesis.hash())
+
     def _make_genesis(self) -> Block:
         cfg = self.cfg
         bits = bits_for_zeros(cfg.initial_zeros)
