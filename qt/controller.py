@@ -447,12 +447,13 @@ class NodeController(QObject):
         if not (0 < int(clean_port) < 65536):
             raise WalletError("invalid port")
         # Warn if port doesn't match expected P2P port
-        expected_p2p = self.cfg.p2p_port if self.cfg else 8033
+        expected_p2p = getattr(getattr(self, "cfg", None), "p2p_port", 8033) if getattr(self, "cfg", None) else 8033
         if clean_port != expected_p2p:
-            self.log_line.emit(
-                f"[WARN] Connecting to port {clean_port}, but expected P2P port is {expected_p2p}. "
-                f"Make sure you're using the node's P2P port, not API/HTTP port."
-            )
+            if hasattr(self, "log_line"):
+                self.log_line.emit(
+                    f"[WARN] Connecting to port {clean_port}, but expected P2P port is {expected_p2p}. "
+                    f"Make sure you're using the node's P2P port, not API/HTTP port."
+                )
         return clean_host, int(clean_port)
 
     def add_peer(self, host: str, port: int):
