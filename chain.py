@@ -38,6 +38,13 @@ class Blockchain:
     def load(self):
         with self._lock:
             if self.storage.height() >= 0:
+                expected_genesis = self.compute_genesis_hash(self.cfg)
+                stored_genesis = self.genesis_hash()
+                if stored_genesis and stored_genesis != expected_genesis:
+                    raise ValueError(
+                        f"Stored genesis hash ({stored_genesis}) does not match expected genesis hash ({expected_genesis}). "
+                        f"Consensus parameters modified or corrupt storage database."
+                    )
                 self._rebuild_state()
             else:
                 self._bootstrap()

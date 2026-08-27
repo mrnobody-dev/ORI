@@ -144,6 +144,17 @@ class Config:
         if enable_p2p is None:
             enable_p2p = "1" if file_cfg.get("enable_p2p", True) else "0"
 
+        magic_raw = _env_or_file("BTPY_NETWORK_MAGIC", "network_magic", cls.network_magic.hex() if isinstance(cls.network_magic, bytes) else "4f524931")
+        if isinstance(magic_raw, bytes):
+            net_magic = magic_raw
+        elif isinstance(magic_raw, str):
+            try:
+                net_magic = bytes.fromhex(magic_raw)
+            except ValueError:
+                net_magic = magic_raw.encode("utf-8")
+        else:
+            net_magic = cls.network_magic
+
         return cls(
             data_dir=_env_or_file("BTPY_DATA_DIR", "data_dir", "data"),
             api_host=_env_or_file("BTPY_API_HOST", "api_host", "0.0.0.0"),
@@ -186,9 +197,9 @@ class Config:
             max_mempool_txs=int(_env_or_file("BTPY_MAX_MEMPOOL_TXS", "max_mempool_txs", str(cls.max_mempool_txs))),
             max_side_branch_blocks=int(_env_or_file("BTPY_MAX_SIDE_BRANCH_BLOCKS", "max_side_branch_blocks", str(cls.max_side_branch_blocks))),
             low_s_activation_height=int(_env_or_file("BTPY_LOW_S_ACTIVATION", "low_s_activation_height", str(cls.low_s_activation_height))),
-            network_magic=_env_or_file("BTPY_NETWORK_MAGIC", "network_magic", cls.network_magic.hex()).encode(),
+            network_magic=net_magic,
             max_money_sats=int(_env_or_file("BTPY_MAX_MONEY", "max_money_sats", str(cls.max_money_sats))),
-            seed_dns_host=_env_or_file("BTPY_SEED_DNS_HOST", "seed_dns_host", "127.0.0.1"),
+            seed_dns_host=_env_or_file("BTPY_SEED_DNS_HOST", "seed_dns_host", ""),
             seed_dns_port=int(_env_or_file("BTPY_SEED_DNS_PORT", "seed_dns_port", "5353")),
             seed_dns_name=_env_or_file("BTPY_SEED_DNS_NAME", "seed_dns_name", "seed.ori"),
             seed_dns_p2p_port=int(_env_or_file("BTPY_SEED_DNS_P2P_PORT", "seed_dns_p2p_port", "8033")),

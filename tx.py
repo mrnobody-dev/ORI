@@ -113,13 +113,14 @@ class Transaction:
         pos += 4
         message = ""
         if pos < len(data):
+            saved_pos = pos
             try:
-                mlen, pos = varint_decode(data, pos)
-                if mlen > 0:
-                    message = data[pos : pos + mlen].decode("utf-8", errors="replace")
-                    pos += mlen
+                mlen, next_pos = varint_decode(data, pos)
+                if mlen >= 0 and next_pos + mlen <= len(data):
+                    message = data[next_pos : next_pos + mlen].decode("utf-8")
+                    pos = next_pos + mlen
             except Exception:
-                pass
+                pos = saved_pos
         return cls(version, inputs, outputs, locktime, message), pos
 
     def txid(self) -> bytes:

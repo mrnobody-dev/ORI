@@ -18,6 +18,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 FLAGS = {
     "-datadir": "BTPY_DATA_DIR",
     "-api-host": "BTPY_API_HOST",
+    "-p2phost": "BTPY_P2P_HOST",
+    "-p2p-host": "BTPY_P2P_HOST",
     "-port": "BTPY_API_PORT",
     "-p2pport": "BTPY_P2P_PORT",
     "-seed-peers": "BTPY_SEED_PEERS",
@@ -29,7 +31,7 @@ FLAGS = {
     "-initial-zeros": "BTPY_INITIAL_ZEROS",
 }
 
-USAGE = "usage: ./orid [-datadir=data] [-api-host=127.0.0.1] [-port=8000] [-p2pport=8033] [-seed-peers=h:p,...]"
+USAGE = "usage: ./orid [-datadir=data] [-api-host=127.0.0.1] [-p2phost=0.0.0.0] [-port=8000] [-p2pport=8033] [-seed-peers=h:p,...]"
 
 
 def main(argv):

@@ -156,7 +156,7 @@ BTPY_ENABLE_P2P=1                 # 0 = node solo tanpa peer
 BTPY_SEED_PEERS=host:port,host:port
 BTPY_MAX_MEMPOOL_TXS=100000       # kapasitas mempool
 BTPY_MAX_SIDE_BRANCH_BLOCKS=512   # batas penyimpanan fork lemah (anti disk-fill)
-BTPY_COINBASE_MATURITY=100        # blok sebelum reward bisa dibelanjakan
+BTPY_COINBASE_MATURITY=2000        # blok sebelum reward bisa dibelanjakan
 ```
 
 ### DNS seed internal (opsional, biasanya kosong di Railway)

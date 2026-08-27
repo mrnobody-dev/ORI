@@ -14,7 +14,16 @@ import pytest
 # N-01  config.checkpoints key type always int
 # ---------------------------------------------------------------------------
 
-def test_checkpoint_keys_are_int_from_defaults():
+def test_magic_hex_or_bytes_parsing():
+    from config import Config
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"BTPY_NETWORK_MAGIC": "4f524931"}):
+        cfg = Config.from_env()
+        assert cfg.network_magic == b"\x4f\x52\x49\x31"
+        assert len(cfg.network_magic) == 4
+
     """Default checkpoints must have int keys so `height in checkpoints` works."""
     from config import Config
     import tempfile

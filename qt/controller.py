@@ -446,13 +446,12 @@ class NodeController(QObject):
             raise WalletError("peer host is required")
         if not (0 < int(clean_port) < 65536):
             raise WalletError("invalid port")
-        # Warn if port doesn't match expected P2P port
+        # Log info if port doesn't match standard local P2P port (e.g., custom or cloud TCP proxy)
         expected_p2p = getattr(getattr(self, "cfg", None), "p2p_port", 8033) if getattr(self, "cfg", None) else 8033
         if clean_port != expected_p2p:
             if hasattr(self, "log_line"):
                 self.log_line.emit(
-                    f"[WARN] Connecting to port {clean_port}, but expected P2P port is {expected_p2p}. "
-                    f"Make sure you're using the node's P2P port, not API/HTTP port."
+                    f"[INFO] Connecting to port {clean_port} (configured local P2P port is {expected_p2p})."
                 )
         return clean_host, int(clean_port)
 

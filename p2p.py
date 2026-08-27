@@ -377,6 +377,9 @@ class Peer(threading.Thread):
             with self.network._lock:
                 self.network._connect_fails.pop(self.addr, None)
                 self.network._protocol_fails.pop(self.addr, None)
+                if self.outbound and len(self.network._anchor_peers) < ANCHOR_CONNECTIONS:
+                    self.network._anchor_peers.add(self.addr)
+                    logger.info(LogCategory.P2P, "Peer promoted to anchor", peer=_peer_label(self.addr))
             self.network.node.on_peer_ready(self)
         elif cmd == "addr":
             data = json.loads(payload)
@@ -1006,11 +1009,7 @@ class Network:
                         total_peers=len(self.peers))
             self._record_peer_event("connected", peer=peer)
             
-            # Promote to anchor if we have few anchors and peer is outbound
-            if peer.outbound and len(self._anchor_peers) < ANCHOR_CONNECTIONS:
-                self._anchor_peers.add(peer.addr)
-                logger.info(LogCategory.P2P, "Peer promoted to anchor", peer=_peer_label(peer.addr))
-            
+            # Promote to anchor only AFTER full handshake completion in verack
             return True
 
     def drop(self, peer: Peer):
@@ -1369,16 +1368,17 @@ def read_exact(sock: socket.socket, size: int) -> bytes:
 
 
 def read_msg(sock: socket.socket, max_size: int, magic: bytes):
-    header = read_exact(sock, 4 + CMD_SIZE + 4)
+    magic_len = len(magic)
+    header = read_exact(sock, magic_len + CMD_SIZE + 4)
     if header is None:
         return None
-    if header[0:4] != magic:
+    if header[0:magic_len] != magic:
         raise ValueError("bad magic")
-    length = struct.unpack_from("<I", header, 4 + CMD_SIZE)[0]
+    length = struct.unpack_from("<I", header, magic_len + CMD_SIZE)[0]
     if length > max_size:
         raise ValueError("message too large")
     payload = read_exact(sock, length)
     if payload is None:
         return None
-    cmd = header[4:4 + CMD_SIZE].rstrip(b"\x00").decode()
+    cmd = header[magic_len:magic_len + CMD_SIZE].rstrip(b"\x00").decode()
     return cmd, payload
