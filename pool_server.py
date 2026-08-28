@@ -56,6 +56,7 @@ from utils import sha256d
 POOL_NODE_URL = os.environ.get("POOL_NODE_URL", "http://127.0.0.1:8000").rstrip("/")
 POOL_NODE_TOKEN = os.environ.get("BTPY_API_TOKEN", "")
 POOL_ADDRESS = os.environ.get("POOL_ADDRESS", "")       # payout address (required)
+POOL_PRIVATE_KEY = os.environ.get("POOL_PRIVATE_KEY", "")  # HEX private key for auto-payout
 POOL_FEE_PCT = float(os.environ.get("POOL_FEE_PCT", "1.0"))
 POOL_FEE_ADDRESS = os.environ.get("POOL_FEE_ADDRESS", "")
 PPLNS_POINTS = int(os.environ.get("PPLNS_POINTS", "10000"))   # window size (shares)
@@ -239,6 +240,7 @@ class Ledger:
         self.total_shares = 0
         self.workers: dict[str, dict] = {}                 # addr -> vardiff state
         self.blocks_history: deque = deque(maxlen=50)      # found-block log
+        self.last_payout_height = 0                        # Track last auto-payout
         self.saved_at: float = 0.0
         self._primary_valid = False   # can we safely rotate primary -> .bak?
         self._saves_done = 0
@@ -257,6 +259,7 @@ class Ledger:
         self.balances = {k: int(v) for k, v in d.get("balances", {}).items()}
         self.total_blocks = int(d.get("total_blocks", 0))
         self.total_shares = int(d.get("total_shares", 0))
+        self.last_payout_height = int(d.get("last_payout_height", 0))
         self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
         for addr, w in d.get("workers", {}).items():
             self.workers[addr] = {
@@ -338,6 +341,7 @@ class Ledger:
             "balances": self.balances,
             "total_blocks": self.total_blocks,
             "total_shares": self.total_shares,
+            "last_payout_height": self.last_payout_height,
             "blocks_history": list(self.blocks_history),
             "workers": {
                 k: {"shift": w.get("shift", POOL_DIFF_SHIFT),
@@ -440,6 +444,61 @@ class Ledger:
 
 
 LEDGER = Ledger()
+
+
+# ── Auto-Payout System ────────────────────────────────────────────────────
+
+def auto_payout_check():
+    """Check if payouts needed and execute automatically every N blocks."""
+    if not POOL_PRIVATE_KEY:
+        # Auto-payout disabled - manual payout via pool_payout.py script
+        return
+    
+    try:
+        MIN_PAYOUT_SATS = int(os.environ.get("MIN_PAYOUT_SATS", "100000000"))
+        PAYOUT_FREQUENCY = int(os.environ.get("PAYOUT_FREQUENCY_BLOCKS", "500"))
+        
+        # Get current blockchain height
+        _, stats = _req("GET", "/stats")
+        current_height = int(stats.get("chain_height", 0))
+        
+        # Check if payout time (every PAYOUT_FREQUENCY blocks)
+        if current_height - LEDGER.last_payout_height < PAYOUT_FREQUENCY:
+            return
+        
+        # Check if any balances meet minimum
+        with LEDGER.lock:
+            pending = {
+                addr: bal for addr, bal in LEDGER.balances.items()
+                if bal >= MIN_PAYOUT_SATS and addr != POOL_ADDRESS
+            }
+        
+        if not pending:
+            LEDGER.last_payout_height = current_height
+            LEDGER.save()
+            return
+        
+        print(f"[payout] Auto-payout triggered: {len(pending)} miners, {sum(pending.values())} sats", flush=True)
+        
+        # Execute payout via subprocess (use existing pool_payout.py)
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "pool_payout.py"],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            print(f"[payout] SUCCESS: {result.stdout}", flush=True)
+            LEDGER.last_payout_height = current_height
+            # Balances cleared by pool_payout.py
+            LEDGER.save()
+        else:
+            print(f"[payout] FAILED: {result.stderr}", flush=True)
+            
+    except Exception as exc:
+        print(f"[payout] Auto-payout ERROR: {exc}", flush=True)
 
 
 # ── share validation helpers ──────────────────────────────────────────────
@@ -665,6 +724,10 @@ def pool_submit(body: SubmitReq):
             raise HTTPException(status_code=502, detail=f"node rejected block: {detail}")
         payout = LEDGER.credit_block(int(job["reward_sats"]), int(job["height"]))
         TPL.refresh()
+        
+        # TODO: Trigger auto-payout check after block found (not implemented yet)
+        # auto_payout_check()
+        
         return {
             "accepted": True,
             "is_block": True,
