@@ -54,17 +54,12 @@ def execute_payout() -> bool:
     try:
         print(f"[payout-daemon] ⚡ Executing payout...", flush=True)
         
-        # Build command
+        # pool_payout.py uses ENVIRONMENT VARIABLES, not command-line args!
+        # All configuration is already passed via environment (inherited from pool_server.py)
         cmd = [
             sys.executable,  # python
             "pool_payout.py",
-            "--pool-address", POOL_ADDRESS,
-            "--private-key", POOL_PRIVATE_KEY,
-            "--node", POOL_NODE_URL,
         ]
-        
-        if POOL_API_TOKEN:
-            cmd.extend(["--token", POOL_API_TOKEN])
         
         # Execute with timeout
         result = subprocess.run(
@@ -72,7 +67,8 @@ def execute_payout() -> bool:
             capture_output=True,
             text=True,
             timeout=120,  # 2 minute timeout
-            cwd=os.path.dirname(os.path.abspath(__file__))
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            env=os.environ.copy()  # Pass all environment variables
         )
         
         if result.returncode == 0:
