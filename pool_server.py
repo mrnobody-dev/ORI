@@ -459,8 +459,11 @@ def auto_payout_check():
     Creates and broadcasts payout transactions using pool private key.
     Pays all miners with balance >= MIN_PAYOUT_SATS.
     """
+    print(f"[payout] auto_payout_check() called", flush=True)
+    
     if not ENABLE_AUTO_PAYOUT:
         # Auto-payout disabled
+        print(f"[payout] ENABLE_AUTO_PAYOUT=false, skipping", flush=True)
         return
     
     if not POOL_PRIVATE_KEY:
@@ -662,6 +665,20 @@ def _expected_merkle(job: dict) -> bytes:
 async def _lifespan(app: FastAPI):
     if not POOL_ADDRESS:
         raise RuntimeError("POOL_ADDRESS env is required (pool payout address)")
+    
+    # Log auto-payout configuration at startup
+    print(f"[pool] ========== AUTO-PAYOUT CONFIG ==========", flush=True)
+    print(f"[pool] ENABLE_AUTO_PAYOUT: {ENABLE_AUTO_PAYOUT}", flush=True)
+    print(f"[pool] POOL_PRIVATE_KEY: {'SET ('+str(len(POOL_PRIVATE_KEY))+' chars)' if POOL_PRIVATE_KEY else 'NOT SET'}", flush=True)
+    print(f"[pool] PAYOUT_FREQUENCY_BLOCKS: {os.environ.get('PAYOUT_FREQUENCY_BLOCKS', '500')}", flush=True)
+    print(f"[pool] MIN_PAYOUT_SATS: {os.environ.get('MIN_PAYOUT_SATS', '100000000')}", flush=True)
+    print(f"[pool] AUTO_PAYOUT_DRY_RUN: {AUTO_PAYOUT_DRY_RUN}", flush=True)
+    if ENABLE_AUTO_PAYOUT and POOL_PRIVATE_KEY:
+        print(f"[pool] ✅ Auto-payout ACTIVE - will trigger every {os.environ.get('PAYOUT_FREQUENCY_BLOCKS', '500')} blocks", flush=True)
+    else:
+        print(f"[pool] ⚠️  Auto-payout DISABLED - manual payout required", flush=True)
+    print(f"[pool] ==========================================", flush=True)
+    
     TPL.start()
     yield
 
