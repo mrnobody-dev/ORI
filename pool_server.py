@@ -480,8 +480,10 @@ def auto_payout_check():
         
         # Check if payout time
         blocks_since_last = current_height - LEDGER.last_payout_height
+        print(f"[payout] Blocks since last payout: {blocks_since_last} (need {PAYOUT_FREQUENCY})", flush=True)
         if blocks_since_last < PAYOUT_FREQUENCY:
             # Not time yet
+            print(f"[payout] Not time yet, skipping", flush=True)
             return
         
         print(f"[payout] Auto-payout check: {blocks_since_last} blocks since last payout", flush=True)
@@ -628,6 +630,7 @@ def auto_payout_check():
     except Exception as exc:
         print(f"[payout] AUTO-PAYOUT ERROR: {exc}", flush=True)
         import traceback
+        print(f"[payout] Traceback:", flush=True)
         traceback.print_exc()
 
 
