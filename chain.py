@@ -445,6 +445,14 @@ class Blockchain:
                 if parent_on_main:
                     self._remember_invalid(h)
                 return False, "incorrect difficulty bits", None
+            
+            # Time warp attack protection: enforce minimum time increment
+            # Prevents rapid-fire blocks that game difficulty adjustment
+            if height > 0:
+                min_time = parent["timestamp"] + int(self.cfg.block_time_seconds * 0.5)
+                if block.header.timestamp < min_time:
+                    return False, "timestamp too close to parent (time warp protection)", None
+            
             if height >= self.cfg.shield_window:
                 timestamps = []
                 cur_hash = hexstr(block.header.prev_hash)

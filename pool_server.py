@@ -64,6 +64,7 @@ MIN_SHIFT = int(os.environ.get("POOL_MIN_SHIFT", "4"))          # hardest (node_
 MAX_SHIFT = int(os.environ.get("POOL_MAX_SHIFT", "24"))         # easiest
 SHARE_FAST_SEC = float(os.environ.get("SHARE_FAST_SEC", "5"))   # harder if faster
 SHARE_SLOW_SEC = float(os.environ.get("SHARE_SLOW_SEC", "45"))  # easier if slower
+SHARE_RATE_LIMIT_SEC = float(os.environ.get("SHARE_RATE_LIMIT_SEC", "0.5"))  # Anti-spam: max 1 share per 0.5s per worker
 POOL_DATA_DIR = os.environ.get("POOL_DATA_DIR", "pool_data")
 POOL_GIST_TOKEN = os.environ.get("POOL_GIST_TOKEN", "")
 
@@ -376,14 +377,19 @@ class Ledger:
 
     def add_share(self, worker: str):
         with self.lock:
-            self.window.append(worker)
-            self.total_shares += 1
             w = self.workers.setdefault(worker, {
                 "shift": POOL_DIFF_SHIFT, "last": time.time(),
                 "shares": 0, "recent": deque(maxlen=600),
             })
             now = time.time()
             dt = now - w["last"]
+            
+            # Rate limit protection: prevent share spam/gaming
+            if dt < SHARE_RATE_LIMIT_SEC:
+                raise ValueError(f"Share submitted too quickly (rate limit: {SHARE_RATE_LIMIT_SEC}s)")
+            
+            self.window.append(worker)
+            self.total_shares += 1
             w["last"] = now
             w["shares"] += 1
             w.setdefault("recent", deque(maxlen=600)).append(now)
@@ -605,7 +611,10 @@ def pool_submit(body: SubmitReq):
     if not is_block:
         if int.from_bytes(h, "big") > pool_target:
             raise HTTPException(status_code=400, detail="above pool target (low difficulty share)")
-        new_shift = LEDGER.add_share(body.worker_addr)
+        try:
+            new_shift = LEDGER.add_share(body.worker_addr)
+        except ValueError as e:
+            raise HTTPException(status_code=429, detail=str(e))  # 429 Too Many Requests
         wt = target_from_bits(int(job["bits"])) << new_shift
         with LEDGER.lock:
             balance = LEDGER.balances.get(body.worker_addr, 0)

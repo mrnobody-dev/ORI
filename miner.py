@@ -16,7 +16,7 @@ from merkle import merkle_root
 from tx import Transaction, coinbase_tx
 from utils import unhexstr
 
-POLL_SECONDS = 1.0
+POLL_SECONDS = 3.69  # Match config.py block_time_seconds for accurate difficulty adjustment
 PROGRESS_SECONDS = 0.5
 DEFAULT_BATCH_NONCES = 65_536
 NONCE_SPACE = 1 << 32
