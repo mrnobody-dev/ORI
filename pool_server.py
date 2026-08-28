@@ -497,8 +497,7 @@ def auto_payout_check():
         
         if not pending:
             print(f"[payout] No payouts needed (all < {MIN_PAYOUT_SATS} sats)", flush=True)
-            LEDGER.last_payout_height = current_height
-            LEDGER.save()
+            # DON'T update last_payout_height here - only update after SUCCESSFUL payout!
             return
         
         total_payout = sum(pending.values())
