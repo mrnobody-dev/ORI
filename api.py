@@ -359,41 +359,87 @@ def create_app(node, lifespan=None):
         history = []
         total_received = 0
         total_spent = 0
+        
+        # Debug: Mari kita hitung balance secara langsung dari UTXOs juga
+        direct_balance = sum(utxo.get('value', 0) for utxo in all_utxos if utxo.get('mature', True))
+        direct_immature = sum(utxo.get('value', 0) for utxo in all_utxos if not utxo.get('mature', True))
+        
         # Fast path: in-memory address index (O(address history), not O(chain)).
-        for entry in node.chain.address_history(address):
-            found = node.chain.get_tx(entry["txid"])
-            if not found:
-                continue
-            tx, meta = found
-            received = sum(
-                o.value for o in tx.outputs
-                if o.script_pubkey.decode(errors="replace") == address
-            )
-            spent = 0
-            for txin in tx.inputs:
-                if txin.prev_txid == NULL_HASH:
+        address_history_entries = node.chain.address_history(address)
+        
+        # Jika address history kosong tapi ada UTXOs, ini berarti coinbase mining rewards
+        # Mari kita hitung dari UTXOs langsung
+        if not address_history_entries and all_utxos:
+            # Untuk mining address, semua UTXOs adalah received (coinbase rewards)
+            # dan tidak ada spent (karena semua masih UTXO)
+            total_received = direct_balance + direct_immature
+            total_spent = 0
+            
+            # Buat history entries dari UTXOs untuk display
+            utxo_groups = {}
+            for utxo in all_utxos:
+                height = utxo.get('height', 0)
+                if height not in utxo_groups:
+                    utxo_groups[height] = []
+                utxo_groups[height].append(utxo)
+            
+            # Buat history entries (limit to 50 recent blocks untuk performa)
+            for height in sorted(utxo_groups.keys(), reverse=True)[:50]:
+                utxos_at_height = utxo_groups[height]
+                total_value = sum(u.get('value', 0) for u in utxos_at_height)
+                
+                # Get block info
+                b_row = node.storage.block_by_height(height)
+                ts = b_row["timestamp"] if b_row else None
+                block_hash = b_row["hash"].hex() if b_row else None
+                
+                history.append({
+                    "txid": utxos_at_height[0].get('txid', 'unknown'),
+                    "height": height,
+                    "timestamp": ts,
+                    "received_sats": total_value,
+                    "spent_sats": 0,
+                    "net_sats": total_value,
+                    "mempool": False,
+                    "block_hash": block_hash,
+                    "utxo_count": len(utxos_at_height)
+                })
+        else:
+            # Original logic untuk non-mining addresses
+            for entry in address_history_entries:
+                found = node.chain.get_tx(entry["txid"])
+                if not found:
                     continue
-                prev = node.chain.get_tx(txin.prev_txid.hex())
-                if not prev:
-                    continue
-                prev_tx, _ = prev
-                if txin.prev_vout < len(prev_tx.outputs):
-                    out = prev_tx.outputs[txin.prev_vout]
-                    if out.script_pubkey.decode(errors="replace") == address:
-                        spent += out.value
-            b_row = node.storage.block_by_height(meta["height"])
-            ts = b_row["timestamp"] if b_row else None
-            history.append({
-                "txid": entry["txid"],
-                "height": meta["height"],
-                "timestamp": ts,
-                "received_sats": received,
-                "spent_sats": spent,
-                "net_sats": received - spent,
-                "mempool": False,
-            })
-            total_received += received
-            total_spent += spent
+                tx, meta = found
+                received = sum(
+                    o.value for o in tx.outputs
+                    if o.script_pubkey.decode(errors="replace") == address
+                )
+                spent = 0
+                for txin in tx.inputs:
+                    if txin.prev_txid == NULL_HASH:
+                        continue
+                    prev = node.chain.get_tx(txin.prev_txid.hex())
+                    if not prev:
+                        continue
+                    prev_tx, _ = prev
+                    if txin.prev_vout < len(prev_tx.outputs):
+                        out = prev_tx.outputs[txin.prev_vout]
+                        if out.script_pubkey.decode(errors="replace") == address:
+                            spent += out.value
+                b_row = node.storage.block_by_height(meta["height"])
+                ts = b_row["timestamp"] if b_row else None
+                history.append({
+                    "txid": entry["txid"],
+                    "height": meta["height"],
+                    "timestamp": ts,
+                    "received_sats": received,
+                    "spent_sats": spent,
+                    "net_sats": received - spent,
+                    "mempool": False,
+                })
+                total_received += received
+                total_spent += spent
         # Unconfirmed: mempool summary (no hex serialization).
         for m_entry in node.mempool.summary():
             received = sum(
