@@ -448,8 +448,9 @@ async function loadTx(txid){
 }
 
 /* ── Address ─────────────────────────────────────────── */
-async function loadAddress(addr){
-  const d = await api("/address/" + addr);
+async function loadAddress(addr, utxoPage){
+  const page = Math.max(1, parseInt(utxoPage) || 1);
+  const d = await api("/address/" + addr + "?utxo_page=" + page + "&utxo_limit=10");
   const u = d.utxos || [];
   const mature = u.filter(x => x.mature);
   const immature = u.filter(x => !x.mature);
@@ -457,6 +458,8 @@ async function loadAddress(addr){
   const imm = immature.reduce((a,x) => a + x.value, 0);
   const history = d.history || [];
   const txids = [...new Set(history.map(x => x.txid).filter(Boolean))];
+  const pagination = d.utxo_pagination || {};
+  
   $("#sub").innerHTML = `
     <h2>Wallet Address</h2>
     <div class="detail">
@@ -466,7 +469,7 @@ async function loadAddress(addr){
       <div class="row"><div class="k">Total Spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
       <div class="row"><div class="k">Total Volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
       <div class="row"><div class="k">Immature Mining</div><div class="v mono">${fmtOri(imm)}</div></div>
-      <div class="row"><div class="k">Stats</div><div class="v"><span class="badge badge-green">${u.length} UTXOs</span> <span class="badge badge-no" style="margin-left:8px">${txids.length} Transactions</span></div></div>
+      <div class="row"><div class="k">Stats</div><div class="v"><span class="badge badge-green">${pagination.total_items || u.length} UTXOs</span> <span class="badge badge-no" style="margin-left:8px">${txids.length} Transactions</span></div></div>
     </div>
     
     <h2>Transaction History</h2>
@@ -482,7 +485,7 @@ async function loadAddress(addr){
     </table>` : '<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px; text-align:center; color:var(--muted); font-weight:500;">No transactions found for this address.</div>'}
     </div>
     
-    <h2>Unspent Outputs (UTXOs)</h2>
+    <h2>Unspent Outputs (UTXOs) ${pagination.total_items ? `<span class="badge badge-green" style="margin-left:8px">${pagination.total_items} total</span>` : ''}</h2>
     <div style="overflow-x:auto;">
     ${u.length ? `<table>
       <tr><th>TxID</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
@@ -493,7 +496,13 @@ async function loadAddress(addr){
         <td>${x.mature ? '<span class="badge badge-green">Spendable</span>' : '<span class="badge badge-pending">Immature</span>'}</td>
       </tr>`).join("")}
     </table>` : '<p class="muted">No UTXOs.</p>'}
-    </div>`;
+    </div>
+    
+    ${pagination.total_pages > 1 ? `<div class="pager">
+      <button ${!pagination.has_prev ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page - 1}'">&larr; Previous</button>
+      <span>Page ${pagination.current_page} of ${pagination.total_pages} (${pagination.start_index}-${pagination.end_index} of ${pagination.total_items} UTXOs)</span>
+      <button ${!pagination.has_next ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page + 1}'">Next &rarr;</button>
+    </div>` : ''}`;
 }
 
 /* ── Mempool ─────────────────────────────────────────── */
@@ -545,7 +554,7 @@ async function router(){
     if (parts[0] === "blocks") return loadBlocks(params.get("start"));
     if (parts[0] === "block") return loadBlock(parts[1]);
     if (parts[0] === "tx") return loadTx(parts[1]);
-    if (parts[0] === "address") return loadAddress(parts[1]);
+    if (parts[0] === "address") return loadAddress(parts[1], params.get("utxo_page"));
     if (parts[0] === "mempool") return loadMempool();
     $("#sub").innerHTML = "<div style='text-align:center; padding:60px 0;'><h2>404 Not Found</h2><p class='muted'>The page you are looking for does not exist on this explorer.</p></div>";
   } catch (e) {

@@ -336,9 +336,26 @@ def create_app(node, lifespan=None):
     # ─────────────────────────────────────────────────────────────
 
     @app.get("/address/{address}", summary="Address balance and UTXOs", tags=["Wallet"])
-    def get_address(address: str, request: Request):
+    def get_address(
+        address: str, 
+        request: Request,
+        utxo_page: int = Query(1, ge=1, description="UTXO page number"),
+        utxo_limit: int = Query(10, ge=1, le=100, description="UTXOs per page")
+    ):
         _rate_limit(f"addr:{request.client.host if request.client else '?'}", _RL_DEFAULT)
-        utxos = node.chain.utxos_of(address)
+        all_utxos = node.chain.utxos_of(address)
+        
+        # Paginate UTXOs
+        total_utxos = len(all_utxos)
+        start_idx = (utxo_page - 1) * utxo_limit
+        end_idx = start_idx + utxo_limit
+        paginated_utxos = all_utxos[start_idx:end_idx]
+        
+        # Calculate pagination info
+        total_pages = (total_utxos + utxo_limit - 1) // utxo_limit
+        has_next = utxo_page < total_pages
+        has_prev = utxo_page > 1
+        
         history = []
         total_received = 0
         total_spent = 0
@@ -400,7 +417,17 @@ def create_app(node, lifespan=None):
             "balance_sats": node.chain.balance(address),
             "immature_sats": node.chain.immature_balance(address),
             "coinbase_maturity": node.cfg.coinbase_maturity,
-            "utxos": utxos,
+            "utxos": paginated_utxos,
+            "utxo_pagination": {
+                "current_page": utxo_page,
+                "per_page": utxo_limit,
+                "total_items": total_utxos,
+                "total_pages": total_pages,
+                "has_next": has_next,
+                "has_prev": has_prev,
+                "start_index": start_idx + 1 if total_utxos > 0 else 0,
+                "end_index": min(end_idx, total_utxos)
+            },
             "total_received_sats": total_received,
             "total_spent_sats": total_spent,
             "total_volume_sats": total_received + total_spent,
