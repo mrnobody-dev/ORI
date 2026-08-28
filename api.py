@@ -391,7 +391,13 @@ def create_app(node, lifespan=None):
                 # Get block info
                 b_row = node.storage.block_by_height(height)
                 ts = b_row["timestamp"] if b_row else None
-                block_hash = b_row["hash"].hex() if b_row else None
+                # Handle hash as either bytes or string
+                if b_row:
+                    block_hash = b_row["hash"]
+                    if isinstance(block_hash, bytes):
+                        block_hash = block_hash.hex()
+                else:
+                    block_hash = None
                 
                 history.append({
                     "txid": utxos_at_height[0].get('txid', 'unknown'),
