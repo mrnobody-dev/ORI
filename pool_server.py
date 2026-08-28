@@ -57,6 +57,8 @@ POOL_NODE_URL = os.environ.get("POOL_NODE_URL", "http://127.0.0.1:8000").rstrip(
 POOL_NODE_TOKEN = os.environ.get("BTPY_API_TOKEN", "")
 POOL_ADDRESS = os.environ.get("POOL_ADDRESS", "")       # payout address (required)
 POOL_PRIVATE_KEY = os.environ.get("POOL_PRIVATE_KEY", "")  # HEX private key for auto-payout
+ENABLE_AUTO_PAYOUT = os.environ.get("ENABLE_AUTO_PAYOUT", "false").lower() == "true"
+AUTO_PAYOUT_DRY_RUN = os.environ.get("AUTO_PAYOUT_DRY_RUN", "false").lower() == "true"
 POOL_FEE_PCT = float(os.environ.get("POOL_FEE_PCT", "1.0"))
 POOL_FEE_ADDRESS = os.environ.get("POOL_FEE_ADDRESS", "")
 PPLNS_POINTS = int(os.environ.get("PPLNS_POINTS", "10000"))   # window size (shares)
@@ -241,6 +243,7 @@ class Ledger:
         self.workers: dict[str, dict] = {}                 # addr -> vardiff state
         self.blocks_history: deque = deque(maxlen=50)      # found-block log
         self.last_payout_height = 0                        # Track last auto-payout
+        self.last_payout_txid = ""                         # Last payout transaction ID
         self.saved_at: float = 0.0
         self._primary_valid = False   # can we safely rotate primary -> .bak?
         self._saves_done = 0
@@ -260,6 +263,7 @@ class Ledger:
         self.total_blocks = int(d.get("total_blocks", 0))
         self.total_shares = int(d.get("total_shares", 0))
         self.last_payout_height = int(d.get("last_payout_height", 0))
+        self.last_payout_txid = d.get("last_payout_txid", "")
         self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
         for addr, w in d.get("workers", {}).items():
             self.workers[addr] = {
@@ -342,6 +346,7 @@ class Ledger:
             "total_blocks": self.total_blocks,
             "total_shares": self.total_shares,
             "last_payout_height": self.last_payout_height,
+            "last_payout_txid": self.last_payout_txid,
             "blocks_history": list(self.blocks_history),
             "workers": {
                 k: {"shift": w.get("shift", POOL_DIFF_SHIFT),
@@ -449,9 +454,17 @@ LEDGER = Ledger()
 # ── Auto-Payout System ────────────────────────────────────────────────────
 
 def auto_payout_check():
-    """Check if payouts needed and execute automatically every N blocks."""
+    """Automatic payout system - triggered every N blocks.
+    
+    Creates and broadcasts payout transactions using pool private key.
+    Pays all miners with balance >= MIN_PAYOUT_SATS.
+    """
+    if not ENABLE_AUTO_PAYOUT:
+        # Auto-payout disabled
+        return
+    
     if not POOL_PRIVATE_KEY:
-        # Auto-payout disabled - manual payout via pool_payout.py script
+        print("[payout] WARNING: ENABLE_AUTO_PAYOUT=true but no POOL_PRIVATE_KEY!", flush=True)
         return
     
     try:
@@ -462,11 +475,15 @@ def auto_payout_check():
         _, stats = _req("GET", "/stats")
         current_height = int(stats.get("chain_height", 0))
         
-        # Check if payout time (every PAYOUT_FREQUENCY blocks)
-        if current_height - LEDGER.last_payout_height < PAYOUT_FREQUENCY:
+        # Check if payout time
+        blocks_since_last = current_height - LEDGER.last_payout_height
+        if blocks_since_last < PAYOUT_FREQUENCY:
+            # Not time yet
             return
         
-        # Check if any balances meet minimum
+        print(f"[payout] Auto-payout check: {blocks_since_last} blocks since last payout", flush=True)
+        
+        # Get pending payouts
         with LEDGER.lock:
             pending = {
                 addr: bal for addr, bal in LEDGER.balances.items()
@@ -474,31 +491,141 @@ def auto_payout_check():
             }
         
         if not pending:
+            print(f"[payout] No payouts needed (all < {MIN_PAYOUT_SATS} sats)", flush=True)
             LEDGER.last_payout_height = current_height
             LEDGER.save()
             return
         
-        print(f"[payout] Auto-payout triggered: {len(pending)} miners, {sum(pending.values())} sats", flush=True)
+        total_payout = sum(pending.values())
+        print(f"[payout] Pending payouts: {len(pending)} miners, {total_payout} sats total", flush=True)
         
-        # Execute payout via subprocess (use existing pool_payout.py)
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, "pool_payout.py"],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        # Import required modules
+        from crypto import pub_from_priv, sign
+        from tx import TxIn, TxOut, Transaction
+        from bech32 import encode_address
+        from config import Config
         
-        if result.returncode == 0:
-            print(f"[payout] SUCCESS: {result.stdout}", flush=True)
-            LEDGER.last_payout_height = current_height
-            # Balances cleared by pool_payout.py
-            LEDGER.save()
-        else:
-            print(f"[payout] FAILED: {result.stderr}", flush=True)
+        cfg = Config.from_env()
+        
+        # Get pool UTXOs (mature coinbase only)
+        _, utxos_resp = _req("GET", f"/address/{POOL_ADDRESS}/utxos")
+        utxos = utxos_resp.get("utxos", [])
+        
+        # Filter mature coinbase (height + 2000 <= current)
+        MATURITY = cfg.coinbase_maturity
+        mature_utxos = [
+            u for u in utxos
+            if u.get("coinbase", False) and current_height >= u.get("height", 0) + MATURITY
+        ]
+        
+        if not mature_utxos:
+            print(f"[payout] No mature coinbase UTXOs (need {MATURITY} blocks maturity)", flush=True)
+            return
+        
+        print(f"[payout] Found {len(mature_utxos)} mature coinbase UTXOs", flush=True)
+        
+        # Derive public key from private key
+        priv_bytes = bytes.fromhex(POOL_PRIVATE_KEY)
+        pub_bytes = pub_from_priv(priv_bytes)
+        
+        # Select UTXOs
+        inputs = []
+        input_total = 0
+        fee_estimate = 1000 + len(pending) * 100  # Base + per-output
+        
+        for utxo in sorted(mature_utxos, key=lambda u: u["value_sats"], reverse=True):
+            if input_total >= total_payout + fee_estimate:
+                break
+            inputs.append(TxIn(
+                prev_tx=bytes.fromhex(utxo["txid"]),
+                prev_index=utxo["index"],
+                script_sig=b"",  # Will be signed
+                sequence=0xffffffff
+            ))
+            input_total += utxo["value_sats"]
+            fee_estimate += 100  # Per-input cost
+        
+        if input_total < total_payout + fee_estimate:
+            print(f"[payout] Insufficient mature funds: {input_total} < {total_payout + fee_estimate}", flush=True)
+            return
+        
+        print(f"[payout] Using {len(inputs)} inputs, total {input_total} sats", flush=True)
+        
+        # Build outputs
+        outputs = []
+        for addr, amount in sorted(pending.items()):
+            # Encode address to script_pubkey
+            from bech32 import decode_address
+            _, witprog = decode_address(cfg.network_hrp, addr)
+            if witprog is None:
+                print(f"[payout] Invalid address {addr}, skipping", flush=True)
+                continue
+            script = bytes([0, len(witprog)]) + witprog
+            outputs.append(TxOut(value_sats=amount, script_pubkey=script))
+        
+        # Change output
+        change = input_total - total_payout - fee_estimate
+        if change > 1000:
+            _, witprog = decode_address(cfg.network_hrp, POOL_ADDRESS)
+            script = bytes([0, len(witprog)]) + witprog
+            outputs.append(TxOut(value_sats=change, script_pubkey=script))
+            print(f"[payout] Change output: {change} sats back to pool", flush=True)
+        
+        # Create unsigned transaction
+        tx = Transaction(version=1, tx_ins=inputs, tx_outs=outputs, locktime=0)
+        
+        # Sign each input
+        print(f"[payout] Signing {len(inputs)} inputs...", flush=True)
+        for i in range(len(tx.tx_ins)):
+            # Get script_pubkey from pool address
+            _, witprog = decode_address(cfg.network_hrp, POOL_ADDRESS)
+            script_pubkey = bytes([0, len(witprog)]) + witprog
             
+            # Compute sighash
+            sighash = tx.sighash(i, script_pubkey)
+            
+            # Sign
+            sig = sign(sighash, priv_bytes)
+            
+            # Build witness (P2WPKH)
+            tx.tx_ins[i].script_sig = b""
+            tx.tx_ins[i].witness = [sig, pub_bytes]
+        
+        tx_hex = tx.to_hex()
+        
+        if AUTO_PAYOUT_DRY_RUN:
+            print(f"[payout] DRY-RUN MODE: Transaction built but NOT broadcast", flush=True)
+            print(f"[payout] TX hex: {tx_hex[:100]}...", flush=True)
+            print(f"[payout] Would pay {len(pending)} miners", flush=True)
+            return
+        
+        # Broadcast transaction
+        print(f"[payout] Broadcasting transaction...", flush=True)
+        _, result = _req("POST", "/tx", {"tx_hex": tx_hex})
+        
+        txid = result.get("txid", "unknown")
+        print(f"[payout] ✅ SUCCESS! TxID: {txid}", flush=True)
+        print(f"[payout] Mempool: {POOL_NODE_URL}/tx/{txid}", flush=True)
+        print(f"[payout] Paid {len(pending)} miners:", flush=True)
+        for addr, amount in list(pending.items())[:5]:  # Show first 5
+            print(f"[payout]   - {addr[:20]}... → {amount/1e8:.8f} ORI", flush=True)
+        if len(pending) > 5:
+            print(f"[payout]   - ... and {len(pending)-5} more", flush=True)
+        
+        # Update ledger: zero out paid balances
+        with LEDGER.lock:
+            for addr in pending:
+                LEDGER.balances[addr] = 0
+            LEDGER.last_payout_height = current_height
+            LEDGER.last_payout_txid = txid
+            LEDGER.save()
+        
+        print(f"[payout] Balances reset, next payout at height {current_height + PAYOUT_FREQUENCY}", flush=True)
+        
     except Exception as exc:
-        print(f"[payout] Auto-payout ERROR: {exc}", flush=True)
+        print(f"[payout] AUTO-PAYOUT ERROR: {exc}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 # ── share validation helpers ──────────────────────────────────────────────
@@ -725,8 +852,9 @@ def pool_submit(body: SubmitReq):
         payout = LEDGER.credit_block(int(job["reward_sats"]), int(job["height"]))
         TPL.refresh()
         
-        # TODO: Trigger auto-payout check after block found (not implemented yet)
-        # auto_payout_check()
+        # Trigger auto-payout check after block found
+        if ENABLE_AUTO_PAYOUT:
+            auto_payout_check()
         
         return {
             "accepted": True,
