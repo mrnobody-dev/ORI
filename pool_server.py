@@ -951,6 +951,13 @@ def pool_ledger_info():
             "window_points": len(LEDGER.window),
             "balances_sats": LEDGER.balances,
         },
+        "payout_status": {
+            "last_payout_height": LEDGER.last_payout_height,
+            "last_payout_txid": LEDGER.last_payout_txid,
+            "auto_payout_enabled": ENABLE_AUTO_PAYOUT,
+            "payout_frequency_blocks": int(os.environ.get("PAYOUT_FREQUENCY_BLOCKS", "500")),
+            "min_payout_sats": int(os.environ.get("MIN_PAYOUT_SATS", "100000000")),
+        },
     }
 
 
