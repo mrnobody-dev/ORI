@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all source files (pool needs merkle.py, pow.py, etc.)
+COPY . .
+
+# Pool environment defaults
+ENV POOL_DATA_DIR=/data \
+    POOL_FEE_PCT=1.2 \
+    PPLNS_POINTS=10000 \
+    ORI_LOG_LEVEL=INFO \
+    ORI_LOG_CONSOLE=1 \
+    ORI_LOG_FILE=0
+
+# Create data directory
+RUN mkdir -p /data
+
+# Expose pool port (Railway will set $PORT)
+EXPOSE 8000
+
+# Start pool server
+CMD ["sh", "-c", "python -m uvicorn pool_server:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log --log-level info"]
