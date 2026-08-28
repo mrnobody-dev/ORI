@@ -236,9 +236,25 @@ const rewardAt = h => {
 };
 
 async function api(path){
-  const r = await fetch(API + path, {headers:{"Accept":"application/json"}});
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+  
+  try {
+    const r = await fetch(API + path, {
+      headers: {"Accept": "application/json"},
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    
+    if (!r.ok) throw new Error("HTTP " + r.status + ": " + (r.statusText || "Unknown error"));
+    return r.json();
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error.name === 'AbortError') {
+      throw new Error("Request timeout - server took too long to respond");
+    }
+    throw error;
+  }
 }
 function fail(e){
   $("#banner").style.display = "block";
@@ -449,60 +465,78 @@ async function loadTx(txid){
 
 /* ── Address ─────────────────────────────────────────── */
 async function loadAddress(addr, utxoPage){
-  const page = Math.max(1, parseInt(utxoPage) || 1);
-  const d = await api("/address/" + addr + "?utxo_page=" + page + "&utxo_limit=10");
-  const u = d.utxos || [];
-  const mature = u.filter(x => x.mature);
-  const immature = u.filter(x => !x.mature);
-  const bal = mature.reduce((a,x) => a + x.value, 0);
-  const imm = immature.reduce((a,x) => a + x.value, 0);
-  const history = d.history || [];
-  const txids = [...new Set(history.map(x => x.txid).filter(Boolean))];
-  const pagination = d.utxo_pagination || {};
-  
-  $("#sub").innerHTML = `
-    <h2>Wallet Address</h2>
-    <div class="detail">
-      <div class="row"><div class="k">Address</div><div class="v mono" style="font-size:15px"><b>${esc(addr)}</b></div></div>
-      <div class="row"><div class="k">Available Balance</div><div class="v mono tx-in" style="font-size:20px"><b>${fmtOri(bal)}</b></div></div>
-      <div class="row"><div class="k">Total Received</div><div class="v mono tx-in">${fmtOri(d.total_received_sats || 0)}</div></div>
-      <div class="row"><div class="k">Total Spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
-      <div class="row"><div class="k">Total Volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
-      <div class="row"><div class="k">Immature Mining</div><div class="v mono">${fmtOri(imm)}</div></div>
-      <div class="row"><div class="k">Stats</div><div class="v"><span class="badge badge-green">${pagination.total_items || u.length} UTXOs</span> <span class="badge badge-no" style="margin-left:8px">${txids.length} Transactions</span></div></div>
-    </div>
+  try {
+    console.log("Loading address:", addr, "page:", utxoPage);
+    const page = Math.max(1, parseInt(utxoPage) || 1);
     
-    <h2>Transaction History</h2>
-    <div style="overflow-x:auto;">
-    ${history.length ? `<table>
-      <tr><th>Transaction ID</th><th>Time</th><th>Status</th><th class="right">Amount</th></tr>
-      ${history.map(x => `<tr>
-        <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
-        <td class="muted">${x.timestamp ? fmtTime(x.timestamp) : "pending"}</td>
-        <td>${x.mempool ? '<span class="badge badge-pending">Pending</span>' : x.net_sats >= 0 ? '<span class="badge badge-green">Received</span>' : '<span class="badge badge-red">Sent</span>'}</td>
-        <td class="right mono ${x.mempool ? "tx-pending" : x.net_sats >= 0 ? "tx-in" : "tx-out"}"><b>${x.net_sats >= 0 ? "+" : ""}${fmtOri(x.net_sats)}</b></td>
-      </tr>`).join("")}
-    </table>` : '<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px; text-align:center; color:var(--muted); font-weight:500;">No transactions found for this address.</div>'}
-    </div>
+    const d = await api("/address/" + addr + "?utxo_page=" + page + "&utxo_limit=10");
+    const u = d.utxos || [];
+    const mature = u.filter(x => x.mature);
+    const immature = u.filter(x => !x.mature);
+    const bal = mature.reduce((a,x) => a + x.value, 0);
+    const imm = immature.reduce((a,x) => a + x.value, 0);
+    const history = d.history || [];
+    const txids = [...new Set(history.map(x => x.txid).filter(Boolean))];
+    const pagination = d.utxo_pagination || {};
     
-    <h2>Unspent Outputs (UTXOs) ${pagination.total_items ? `<span class="badge badge-green" style="margin-left:8px">${pagination.total_items} total</span>` : ''}</h2>
-    <div style="overflow-x:auto;">
-    ${u.length ? `<table>
-      <tr><th>TxID</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
-      ${u.map(x => `<tr>
-        <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
-        <td class="right mono">${x.vout}</td>
-        <td class="right mono tx-in">${fmtOri(x.value)}</td>
-        <td>${x.mature ? '<span class="badge badge-green">Spendable</span>' : '<span class="badge badge-pending">Immature</span>'}</td>
-      </tr>`).join("")}
-    </table>` : '<p class="muted">No UTXOs.</p>'}
-    </div>
+    console.log("Rendering address page with", u.length, "UTXOs, balance:", d.balance_sats);
     
-    ${pagination.total_pages > 1 ? `<div class="pager">
-      <button ${!pagination.has_prev ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page - 1}'">&larr; Previous</button>
-      <span>Page ${pagination.current_page} of ${pagination.total_pages} (${pagination.start_index}-${pagination.end_index} of ${pagination.total_items} UTXOs)</span>
-      <button ${!pagination.has_next ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page + 1}'">Next &rarr;</button>
-    </div>` : ''}`;
+    $("#sub").innerHTML = `
+      <h2>Wallet Address</h2>
+      <div class="detail">
+        <div class="row"><div class="k">Address</div><div class="v mono" style="font-size:15px"><b>${esc(addr)}</b></div></div>
+        <div class="row"><div class="k">Available Balance</div><div class="v mono tx-in" style="font-size:20px"><b>${fmtOri(d.balance_sats || bal)}</b></div></div>
+        <div class="row"><div class="k">Total Received</div><div class="v mono tx-in">${fmtOri(d.total_received_sats || 0)}</div></div>
+        <div class="row"><div class="k">Total Spent</div><div class="v mono tx-out">${fmtOri(d.total_spent_sats || 0)}</div></div>
+        <div class="row"><div class="k">Total Volume</div><div class="v mono">${fmtOri(d.total_volume_sats || 0)}</div></div>
+        <div class="row"><div class="k">Immature Mining</div><div class="v mono">${fmtOri(d.immature_sats || imm)}</div></div>
+        <div class="row"><div class="k">Stats</div><div class="v"><span class="badge badge-green">${pagination.total_items || u.length} UTXOs</span> <span class="badge badge-no" style="margin-left:8px">${txids.length} Transactions</span></div></div>
+      </div>
+      
+      <h2>Transaction History</h2>
+      <div style="overflow-x:auto;">
+      ${history.length ? `<table>
+        <tr><th>Transaction ID</th><th>Time</th><th>Status</th><th class="right">Amount</th></tr>
+        ${history.slice(0, 50).map(x => `<tr>
+          <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
+          <td class="muted">${x.timestamp ? fmtTime(x.timestamp) : "pending"}</td>
+          <td>${x.mempool ? '<span class="badge badge-pending">Pending</span>' : x.net_sats >= 0 ? '<span class="badge badge-green">Received</span>' : '<span class="badge badge-red">Sent</span>'}</td>
+          <td class="right mono ${x.mempool ? "tx-pending" : x.net_sats >= 0 ? "tx-in" : "tx-out"}"><b>${x.net_sats >= 0 ? "+" : ""}${fmtOri(x.net_sats)}</b></td>
+        </tr>`).join("")}
+        ${history.length > 50 ? `<tr><td colspan="4" style="text-align:center;padding:10px;color:var(--muted);">Showing latest 50 transactions of ${history.length} total</td></tr>` : ''}
+      </table>` : '<div style="background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px; text-align:center; color:var(--muted); font-weight:500;">No transactions found for this address.</div>'}
+      </div>
+      
+      <h2>Unspent Outputs (UTXOs) ${pagination.total_items ? `<span class="badge badge-green" style="margin-left:8px">${pagination.total_items} total</span>` : ''}</h2>
+      <div style="overflow-x:auto;">
+      ${u.length ? `<table>
+        <tr><th>TxID</th><th class="right">Vout</th><th class="right">Value</th><th>Status</th></tr>
+        ${u.map(x => `<tr>
+          <td class="mono"><a href="#/tx/${x.txid}">${shortHash(x.txid)}</a></td>
+          <td class="right mono">${x.vout}</td>
+          <td class="right mono tx-in">${fmtOri(x.value)}</td>
+          <td>${x.mature ? '<span class="badge badge-green">Spendable</span>' : '<span class="badge badge-pending">Immature</span>'}</td>
+        </tr>`).join("")}
+      </table>` : '<p class="muted">No UTXOs.</p>'}
+      </div>
+      
+      ${pagination.total_pages > 1 ? `<div class="pager">
+        <button ${!pagination.has_prev ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page - 1}'">&larr; Previous</button>
+        <span>Page ${pagination.current_page} of ${pagination.total_pages} (${pagination.start_index}-${pagination.end_index} of ${pagination.total_items} UTXOs)</span>
+        <button ${!pagination.has_next ? "disabled" : ""} onclick="location.hash='#/address/${addr}?utxo_page=${pagination.current_page + 1}'">Next &rarr;</button>
+      </div>` : ''}`;
+      
+    console.log("Address page rendered successfully");
+  } catch (error) {
+    console.error("Error loading address:", error);
+    $("#sub").innerHTML = `
+      <div style="text-align:center; padding:60px 0;">
+        <h2 style="color:var(--red)">Error Loading Address</h2>
+        <p class="muted">Failed to load address data: ${error.message}</p>
+        <p class="muted">Address: ${esc(addr)}</p>
+        <button onclick="location.reload()" class="more-btn">Refresh Page</button>
+      </div>`;
+  }
 }
 
 /* ── Mempool ─────────────────────────────────────────── */
@@ -548,16 +582,27 @@ async function router(){
   navActive();
   const [route, qs] = (location.hash || "#/").slice(1).split("?");
   const params = new URLSearchParams(qs || "");
+  
+  // Show loading indicator
+  $("#sub").innerHTML = '<div style="text-align:center; padding:60px 0;"><h2>Loading...</h2></div>';
+  
   try {
+    console.log("Routing to:", route, "params:", params.toString());
+    
     if (route === "" || route === "/") return loadHome();
     const parts = route.split("/").filter(Boolean);
     if (parts[0] === "blocks") return loadBlocks(params.get("start"));
     if (parts[0] === "block") return loadBlock(parts[1]);
     if (parts[0] === "tx") return loadTx(parts[1]);
-    if (parts[0] === "address") return loadAddress(parts[1], params.get("utxo_page"));
+    if (parts[0] === "address") {
+      console.log("Loading address:", parts[1], "with params:", params.toString());
+      return loadAddress(parts[1], params.get("utxo_page"));
+    }
     if (parts[0] === "mempool") return loadMempool();
+    
     $("#sub").innerHTML = "<div style='text-align:center; padding:60px 0;'><h2>404 Not Found</h2><p class='muted'>The page you are looking for does not exist on this explorer.</p></div>";
   } catch (e) {
+    console.error("Router error:", e);
     fail(e);
   }
 }
