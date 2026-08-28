@@ -393,10 +393,16 @@ class Ledger:
             w["last"] = now
             w["shares"] += 1
             w.setdefault("recent", deque(maxlen=600)).append(now)
+            
+            # CRITICAL FIX: Aggressive vardiff to keep difficulty close to network
+            # Goal: maintain solo-mining speed (blocks every 3.69s)
             if dt < SHARE_FAST_SEC:
-                w["shift"] = max(MIN_SHIFT, w["shift"] - 1)
+                # Share too fast → make HARDER (reduce shift toward 0)
+                w["shift"] = max(MIN_SHIFT, w["shift"] - 2)  # Faster adjustment!
             elif dt > SHARE_SLOW_SEC:
-                w["shift"] = min(MAX_SHIFT, w["shift"] + 1)
+                # Share too slow → make EASIER (increase shift)
+                # BUT cap at 4 to prevent excessive easement (max 16x easier)
+                w["shift"] = min(min(MAX_SHIFT, 4), w["shift"] + 1)  # Cap at shift=4!
             new_shift = w["shift"]
             # flush EVERY share — redeploy/crash must never eat work
             self.save()
@@ -524,8 +530,17 @@ def pool_job(worker: str = Query(...)):
     w = LEDGER.workers.get(worker) or {}
     shift = int(w.get("shift", POOL_DIFF_SHIFT))
     node_target = target_from_bits(int(tpl["bits"]))
-    pool_target = min(node_target << shift, node_target) if shift == 0 else \
-        node_target << shift
+    
+    # CRITICAL FIX: For solo/small pools, use NETWORK difficulty to maintain
+    # same block-finding speed as solo mining. Pool difficulty should NEVER
+    # be easier than network difficulty - this causes slow block discovery!
+    # Shift=0 means FULL network difficulty (no easement).
+    if shift == 0:
+        pool_target = node_target  # Full network difficulty
+    else:
+        # For public pools: allow easier difficulty for fair share distribution
+        # BUT cap the easement to avoid excessive slow-down
+        pool_target = node_target << min(shift, 4)  # Max 16x easier (was 4096x!)
 
     # Unique job per request. The reference miner rebuilds its candidate
     # deterministically from (height, reward, coinbase, txs, timestamp), so a
