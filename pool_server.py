@@ -679,6 +679,13 @@ async def _lifespan(app: FastAPI):
         print(f"[pool] ⚠️  Auto-payout DISABLED - manual payout required", flush=True)
     print(f"[pool] ==========================================", flush=True)
     
+    # Start payout daemon (alternative to inline auto-payout)
+    try:
+        from pool_payout_daemon import start_payout_daemon
+        start_payout_daemon()
+    except ImportError:
+        print(f"[pool] pool_payout_daemon.py not found, using inline auto-payout only", flush=True)
+    
     TPL.start()
     yield
 
