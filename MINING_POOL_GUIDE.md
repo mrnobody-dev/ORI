@@ -1,54 +1,159 @@
 # ORI Mining Pool Connection Guide
 
-## Panduan Koneksi ke Mining Pool altaria.proxy.rlwy.net:20878
+## Panduan Koneksi ke Distributed Mining Pool
 
 ### Overview
-Dokumen ini menjelaskan cara menghubungkan miner ORI Anda ke mining pool yang berjalan di `altaria.proxy.rlwy.net:20878`.
+Mining pool ORI sekarang menggunakan distributed architecture dengan multiple nodes:
 
-### Prerequisites
-1. **Miner ORI** - Pastikan Anda memiliki miner ORI (miner.py atau miner-ori.exe)
-2. **Wallet Address** - Address ORI yang valid untuk menerima reward (format: ori1...)
-3. **Koneksi Internet** - Akses ke altaria.proxy.rlwy.net
+**🎯 Primary Pools:**
+- **Master Pool**: `http://ori-production-8364.up.railway.app` (HTTP)
+- **TCP Proxy**: `tokaido.proxy.rlwy.net:49718` (TCP) 
+- **Load Balancer**: Pool proxy dengan automatic failover
+- **Altaria Node**: `altaria.proxy.rlwy.net:20878` (Backup)
+
+**⚙️ Pool Configuration:**
+- **PPLNS Rewards**: 1000 shares window
+- **Pool Fee**: 1.2% (Master) + 0.5% (Proxy)
+- **Difficulty**: Auto-adjusting (shift factor 12)
+- **Share Speed**: 5-45 seconds target
 
 ---
 
-## Metode Koneksi
+## Connection Methods
 
-### 1. Menggunakan Python Miner (miner.py)
+### 1. **Smart Miner (Recommended) 🤖**
 
-#### A. Solo Mining ke Pool Server
+#### Multi-Pool with Automatic Failover:
 ```bash
-python miner.py --node http://altaria.proxy.rlwy.net:20878 --address ori1your_address_here --threads 4
+python smart_miner.py \
+  --pools "http://ori-production-8364.up.railway.app,http://tokaido.proxy.rlwy.net:49718,http://altaria.proxy.rlwy.net:20878" \
+  --address ori1your_address_here \
+  --threads 4 \
+  --refresh 30
 ```
 
-#### B. Pool Mining (Jika pool server support pool protocol)
+#### Using Configuration File:
 ```bash
-python miner.py --pool http://altaria.proxy.rlwy.net:20878 --address ori1your_address_here --threads 4
+# Generate default config
+python smart_miner.py --create-config
+
+# Edit smart_miner_config.json, then run:
+python smart_miner.py --config smart_miner_config.json
 ```
 
-### 2. Menggunakan C++ Miner (miner-ori.exe)
+### 2. **Direct Pool Connection**
 
-#### A. Solo Mining
+#### Master Pool (HTTP):
 ```bash
-./miner-ori.exe --node http://altaria.proxy.rlwy.net:20878 --address ori1your_address_here --threads 4
+python miner.py --pool http://ori-production-8364.up.railway.app/pool --address ori1your_address_here --threads 4
 ```
 
-#### B. Pool Mining
+#### TCP Proxy Connection:
 ```bash
-./miner-ori.exe --pool http://altaria.proxy.rlwy.net:20878 --address ori1your_address_here --threads 4
+python miner.py --pool http://tokaido.proxy.rlwy.net:49718/pool --address ori1your_address_here --threads 4
 ```
 
-### 3. Parameter Penting
+#### Load Balanced Connection:
+```bash
+python miner.py --pool http://pool-proxy.railway.app/pool --address ori1your_address_here --threads 4
+```
 
-| Parameter | Deskripsi | Default |
-|-----------|-----------|---------|
-| `--node` atau `--pool` | URL pool server | http://127.0.0.1:8000 |
-| `--address` | Address ORI untuk reward (WAJIB) | - |
-| `--threads` | Jumlah worker threads | CPU cores - 1 |
-| `--batch` | Nonce batch size per worker | 65,536 |
-| `--kernel` | Hashing algorithm (auto/midstate/full) | auto |
-| `--refresh` | Template refresh interval (seconds) | 30.0 |
-| `--api-token` | API token jika diperlukan | - |
+### 3. **Configuration Examples**
+
+#### Smart Miner Config (smart_miner_config.json):
+```json
+{
+  "pools": [
+    "http://ori-production-8364.up.railway.app",
+    "http://tokaido.proxy.rlwy.net:49718", 
+    "http://altaria.proxy.rlwy.net:20878"
+  ],
+  "address": "ori1your_address_here",
+  "threads": 4,
+  "batch": 65536,
+  "kernel": "auto", 
+  "refresh": 30.0,
+  "api_token": "",
+  "quiet": false
+}
+```
+
+#### Pool Priority Configuration:
+```bash
+# High performance setup
+python smart_miner.py \
+  --pools "http://ori-production-8364.up.railway.app,http://tokaido.proxy.rlwy.net:49718" \
+  --address ori1your_address \
+  --threads 8 \
+  --batch 131072 \
+  --kernel midstate
+
+# Development/Testing setup  
+python smart_miner.py \
+  --pools "http://altaria.proxy.rlwy.net:20878" \
+  --address ori1your_address \
+  --threads 2 \
+  --refresh 10 \
+  --quiet
+```
+
+---
+
+## Pool Architecture Benefits
+
+### 🚀 **Distributed Architecture:**
+- **Load Balancing**: Work distributed across multiple nodes
+- **High Availability**: Automatic failover if one pool fails
+- **Geographic Distribution**: Connect to nearest pool automatically
+- **Scalability**: Easy to add more pool nodes
+
+### 💎 **PPLNS Rewards System:**
+- **Fair Distribution**: Pay Per Last N Shares (1000 shares window)
+- **Variance Reduction**: More consistent payouts
+- **Anti-Pool-Hopping**: Rewards long-term miners
+- **Transparent**: All stats visible via API
+
+### 📊 **Smart Features:**
+- **Pool Selection**: Automatic best pool selection based on latency
+- **Worker Consistency**: Each worker assigned to specific pool
+- **Health Monitoring**: Continuous pool health checking
+- **Statistics**: Detailed mining and pool statistics
+
+---
+
+## Monitoring & APIs
+
+### 1. **Pool Statistics:**
+```bash
+# Master pool stats
+curl http://ori-production-8364.up.railway.app/pool/stats
+
+# Proxy aggregated stats  
+curl http://pool-proxy.railway.app/pool/stats
+
+# Individual worker info
+curl http://pool-proxy.railway.app/pool/worker/ori1your_address
+```
+
+### 2. **Pool Health Check:**
+```bash
+# Test pool connectivity
+curl http://ori-production-8364.up.railway.app/
+curl http://tokaido.proxy.rlwy.net:49718/
+
+# Get mining template
+curl "http://ori-production-8364.up.railway.app/mining/template?address=ori1your_address"
+```
+
+### 3. **Smart Miner Status:**
+```bash
+# View pool assignments and health
+python -c "
+import requests
+resp = requests.get('http://pool-proxy.railway.app/')
+print(resp.json())
+"
+```
 
 ---
 

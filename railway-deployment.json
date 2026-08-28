@@ -1,0 +1,99 @@
+{
+  "name": "ORI Distributed Mining Pool",
+  "description": "Multi-node distributed mining pool with load balancing and failover",
+  "services": {
+    "master-pool": {
+      "name": "ORI Master Pool (PPLNS)",
+      "command": "uvicorn pool_server:app --host 0.0.0.0 --port $PORT",
+      "environment": {
+        "BTPY_API_TOKEN": "YOUR_API_TOKEN_HERE",
+        "BTPY_DATA_DIR": "/data",
+        "POOL_ADDRESS": "ori1q2lpx737545zshpqfcyn35gyex03fljwxfucmt6",
+        "POOL_FEE_PCT": "1.2",
+        "PPLNS_POINTS": "1000",
+        "POOL_DIFF_SHIFT": "12",
+        "SHARE_FAST_SEC": "5",
+        "SHARE_SLOW_SEC": "45",
+        "BTPY_API_HOST": "0.0.0.0",
+        "BTPY_ENABLE_P2P": "1",
+        "BTPY_P2P_HOST": "0.0.0.0",
+        "BTPY_P2P_PORT": "26000",
+        "BTPY_SEED_PEERS": "sakura.proxy.rlwy.net:24044",
+        "BTPY_COINBASE_MATURITY": "100",
+        "ORI_LOG_LEVEL": "INFO",
+        "ORI_LOG_CONSOLE": "1",
+        "ORI_LOG_FILE": "0",
+        "POOL_GIST_TOKEN": "YOUR_GIST_TOKEN_HERE",
+        "POOL_ROLE": "master"
+      },
+      "ports": [33333],
+      "domains": ["ori-production-8364.up.railway.app"],
+      "tcp_proxy": "tokaido.proxy.rlwy.net:49718:33333"
+    },
+    "proxy-pool": {
+      "name": "ORI Pool Proxy (Load Balancer)",
+      "command": "uvicorn pool_proxy:app --host 0.0.0.0 --port $PORT",
+      "environment": {
+        "MASTER_POOLS": "http://ori-production-8364.up.railway.app,http://tokaido.proxy.rlwy.net:49718",
+        "PROXY_FEE_PCT": "0.5",
+        "PROXY_POOL_ADDRESS": "ori1proxy_fee_address_replace_with_real",
+        "HEALTH_CHECK_INTERVAL": "30",
+        "TIMEOUT_SECONDS": "10"
+      },
+      "ports": [8001]
+    }
+  },
+  "volumes": {
+    "pool-data": {
+      "mount": "/data",
+      "size": "5GB"
+    }
+  },
+  "networking": {
+    "load_balancer": {
+      "enabled": true,
+      "algorithm": "round_robin",
+      "health_check": {
+        "path": "/",
+        "interval": 30,
+        "timeout": 5
+      }
+    }
+  },
+  "monitoring": {
+    "metrics": ["cpu", "memory", "network", "custom"],
+    "custom_metrics": [
+      {
+        "name": "pool_hashrate",
+        "endpoint": "/pool/stats",
+        "field": "estimated_hashrate_hps"
+      },
+      {
+        "name": "pool_workers",
+        "endpoint": "/pool/stats", 
+        "field": "workers_count"
+      },
+      {
+        "name": "pool_blocks",
+        "endpoint": "/pool/stats",
+        "field": "blocks_found"
+      }
+    ]
+  },
+  "scaling": {
+    "auto_scale": true,
+    "min_replicas": 1,
+    "max_replicas": 5,
+    "metrics": [
+      {
+        "type": "cpu",
+        "threshold": 70
+      },
+      {
+        "type": "custom",
+        "name": "pool_workers",
+        "threshold": 800
+      }
+    ]
+  }
+}
