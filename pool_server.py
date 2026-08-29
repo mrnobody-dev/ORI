@@ -685,8 +685,19 @@ async def _lifespan(app: FastAPI):
     try:
         from pool_payout_daemon import start_payout_daemon
         start_payout_daemon()
-    except ImportError:
-        print(f"[pool] pool_payout_daemon.py not found, using inline auto-payout only", flush=True)
+    except ImportError as e:
+        print(f"[pool] pool_payout_daemon.py not found: {e}", flush=True)
+        print(f"[pool] Using inline auto-payout only", flush=True)
+    except Exception as e:
+        print(f"[pool] Failed to start payout daemon: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    
+    # FORCE RESET payout height to ensure counter works (temporary debug measure)
+    print(f"[pool] Current last_payout_height: {LEDGER.last_payout_height}", flush=True)
+    LEDGER.last_payout_height = 0
+    LEDGER.save()
+    print(f"[pool] FORCED RESET last_payout_height to 0 for clean start", flush=True)
     
     TPL.start()
     yield
