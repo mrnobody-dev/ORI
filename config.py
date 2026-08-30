@@ -102,19 +102,13 @@ class Config:
     assume_valid_height: int = 0
     assume_valid_min_depth: int = 1440
     checkpoints: dict = field(default_factory=lambda: {
-        1000: "597c45c6c969d9b89456300b6fd9342b3c5b86ea97101a0ec4905cce68a10000",
-        2500: "06fb9b60c377feda40a91e83b47cbce3ebad277f1ecbaae8416dcf5b35460000", 
-        5000: "3ac249a467719b0e9b66288fd87f8643abb07b21a41da87533143a6513f70000"
+
     })
 
     @classmethod
     def _default_checkpoints(cls) -> dict:
         """Default blockchain checkpoints for network security"""
-        return {
-            1000: "597c45c6c969d9b89456300b6fd9342b3c5b86ea97101a0ec4905cce68a10000",
-            2500: "06fb9b60c377feda40a91e83b47cbce3ebad277f1ecbaae8416dcf5b35460000", 
-            5000: "3ac249a467719b0e9b66288fd87f8643abb07b21a41da87533143a6513f70000"
-        }
+        return {}
 
     @classmethod
     def from_env(cls) -> "Config":
