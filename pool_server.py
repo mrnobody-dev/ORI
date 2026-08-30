@@ -886,9 +886,19 @@ def pool_submit(body: SubmitReq):
     with _submit_lock:
         cur_tpl = TPL.get(max_age=3600)
         if cur_tpl is None or int(cur_tpl["height"]) != int(job["height"]):
-            raise HTTPException(status_code=400, detail="chain moved on — stale block")
+            raise HTTPException(status_code=400, detail=f"chain moved on — stale block")
         from block import Block, BlockHeader
         from tx import Transaction
+
+        # CRITICAL: Add share to window BEFORE credit_block!
+        # Block-finding share must be counted in PPLNS window!
+        try:
+            new_shift = LEDGER.add_share(body.worker_addr)
+        except ValueError as e:
+            # Rate limit exceeded - but this is a valid block, so credit it anyway
+            # Just keep current shift
+            new_shift = shift
+            print(f"[share] Block share rate-limited but credited: {e}", flush=True)
 
         # Coinbase pays POOL_ADDRESS directly (no fee split in coinbase).
         # Pool fee is handled separately during reward distribution.
