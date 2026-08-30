@@ -525,8 +525,8 @@ def auto_payout_check():
         cfg = Config.from_env()
         
         # Get pool UTXOs (mature coinbase only)
-        _, utxos_resp = _req("GET", f"/address/{POOL_ADDRESS}/utxos")
-        utxos = utxos_resp.get("utxos", [])
+        _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}")
+        utxos = address_resp.get("utxos", [])
         
         # Filter mature coinbase (height + 2000 <= current)
         MATURITY = cfg.coinbase_maturity
