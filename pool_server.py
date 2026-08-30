@@ -519,7 +519,7 @@ def auto_payout_check():
         # Import required modules
         from crypto import pub_from_priv, sign
         from tx import TxIn, TxOut, Transaction
-        from bech32 import encode_address
+        from bech32 import bech32_decode  # NOT encode_address or decode_address!
         from config import Config
         
         cfg = Config.from_env()
@@ -571,11 +571,14 @@ def auto_payout_check():
         # Build outputs
         outputs = []
         for addr, amount in sorted(pending.items()):
-            # Encode address to script_pubkey
-            from bech32 import decode_address
-            _, witprog = decode_address(cfg.network_hrp, addr)
-            if witprog is None:
-                print(f"[payout] Invalid address {addr}, skipping", flush=True)
+            # Decode address to get witness program
+            try:
+                _, witver, witprog = bech32_decode(addr)
+                if witver != 0 or witprog is None:
+                    print(f"[payout] Invalid address {addr}, skipping", flush=True)
+                    continue
+            except Exception as e:
+                print(f"[payout] Failed to decode address {addr}: {e}", flush=True)
                 continue
             script = bytes([0, len(witprog)]) + witprog
             outputs.append(TxOut(value_sats=amount, script_pubkey=script))
@@ -583,7 +586,7 @@ def auto_payout_check():
         # Change output
         change = input_total - total_payout - fee_estimate
         if change > 1000:
-            _, witprog = decode_address(cfg.network_hrp, POOL_ADDRESS)
+            _, witver, witprog = bech32_decode(POOL_ADDRESS)
             script = bytes([0, len(witprog)]) + witprog
             outputs.append(TxOut(value_sats=change, script_pubkey=script))
             print(f"[payout] Change output: {change} sats back to pool", flush=True)
@@ -595,7 +598,7 @@ def auto_payout_check():
         print(f"[payout] Signing {len(inputs)} inputs...", flush=True)
         for i in range(len(tx.tx_ins)):
             # Get script_pubkey from pool address
-            _, witprog = decode_address(cfg.network_hrp, POOL_ADDRESS)
+            _, witver, witprog = bech32_decode(POOL_ADDRESS)
             script_pubkey = bytes([0, len(witprog)]) + witprog
             
             # Compute sighash
