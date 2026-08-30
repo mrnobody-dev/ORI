@@ -25,6 +25,13 @@ def new_keypair() -> tuple:
     return sk.to_string(), _compressed_pubkey(sk.get_verifying_key().to_string())
 
 
+def pub_from_priv(priv: bytes) -> bytes:
+    """Derive compressed public key from private key"""
+    sk = SigningKey.from_string(priv, curve=SECP256k1)
+    vk = sk.get_verifying_key()
+    return _compressed_pubkey(vk.to_string())
+
+
 def pub_to_address(pub: bytes, cfg: Config = None) -> str:
     cfg = cfg or Config()
     return bech32_encode(cfg.network_hrp, 0, hash160(pub))
