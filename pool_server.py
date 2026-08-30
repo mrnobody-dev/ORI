@@ -242,12 +242,25 @@ class Ledger:
         self.total_shares = 0
         self.workers: dict[str, dict] = {}                 # addr -> vardiff state
         self.blocks_history: deque = deque(maxlen=50)      # found-block log
-        self.last_payout_height = 0                        # Track last auto-payout
+        self._last_payout_height_internal = 0              # Track last auto-payout
         self.last_payout_txid = ""                         # Last payout transaction ID
         self.saved_at: float = 0.0
         self._primary_valid = False   # can we safely rotate primary -> .bak?
         self._saves_done = 0
         self._load()
+    
+    @property
+    def last_payout_height(self):
+        return self._last_payout_height_internal
+    
+    @last_payout_height.setter
+    def last_payout_height(self, value):
+        import traceback
+        print(f"[payout] !!! last_payout_height changed: {self._last_payout_height_internal} → {value}", flush=True)
+        print(f"[payout] !!! Caller stack:", flush=True)
+        for line in traceback.format_stack()[:-1]:
+            print(line.strip(), flush=True)
+        self._last_payout_height_internal = value
 
     @staticmethod
     def _read_snapshot(path: str) -> dict:
@@ -262,7 +275,7 @@ class Ledger:
         self.balances = {k: int(v) for k, v in d.get("balances", {}).items()}
         self.total_blocks = int(d.get("total_blocks", 0))
         self.total_shares = int(d.get("total_shares", 0))
-        self.last_payout_height = int(d.get("last_payout_height", 0))
+        self._last_payout_height_internal = int(d.get("last_payout_height", 0))
         self.last_payout_txid = d.get("last_payout_txid", "")
         self.blocks_history = deque(d.get("blocks_history", []), maxlen=50)
         for addr, w in d.get("workers", {}).items():
@@ -695,9 +708,12 @@ async def _lifespan(app: FastAPI):
     
     # FORCE RESET payout height to ensure counter works (temporary debug measure)
     print(f"[pool] Current last_payout_height: {LEDGER.last_payout_height}", flush=True)
-    LEDGER.last_payout_height = 0
+    LEDGER.last_payout_height = -10  # Set to -10 so first payout triggers immediately!
+    print(f"[pool] FORCED RESET last_payout_height to -10 (ensures payout triggers!)", flush=True)
+    
+    # Save immediately to persist
     LEDGER.save()
-    print(f"[pool] FORCED RESET last_payout_height to 0 for clean start", flush=True)
+    print(f"[pool] Saved ledger with reset payout height", flush=True)
     
     TPL.start()
     yield
