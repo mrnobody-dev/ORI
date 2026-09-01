@@ -160,3 +160,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+# .kiro spec files (local documentation, not for public repo)
+.kiro/specs/mainnet-security-audit/
