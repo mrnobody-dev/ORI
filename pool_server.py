@@ -544,7 +544,9 @@ def auto_payout_check():
                 print(f"[payout] Fetched page {utxo_page}: {len(page_utxos)} UTXOs (total: {len(all_utxos)})", flush=True)
                 
                 # Check if there are more pages
-                has_next_page = address_resp.get("has_next_page", False)
+                # Pagination info is nested in utxo_pagination object
+                pagination_info = address_resp.get("utxo_pagination", {})
+                has_next_page = pagination_info.get("has_next", False)
                 if not has_next_page:
                     break
                 
