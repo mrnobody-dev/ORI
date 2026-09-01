@@ -525,37 +525,55 @@ def auto_payout_check():
         cfg = Config.from_env()
         
         # Get pool UTXOs with pagination (mature coinbase only)
+        # Get pool UTXOs with pagination (mature coinbase only)
         # The API returns paginated results (10 per page by default)
         # We need to fetch all pages to ensure mature UTXOs aren't missed
         all_utxos = []
         utxo_page = 1
         max_pages = 500  # Safety limit
+        last_utxo_count = 0
+        consecutive_empty_pages = 0
         
         while utxo_page <= max_pages:
             try:
                 _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}?utxo_page={utxo_page}")
                 page_utxos = address_resp.get("utxos", [])
+                pagination_info = address_resp.get("utxo_pagination", {})
                 
                 if not page_utxos:
                     # Empty page means we've reached the end
+                    consecutive_empty_pages += 1
+                    if consecutive_empty_pages >= 2:
+                        print(f"[payout] Reached end of pagination (empty pages)", flush=True)
+                        break
+                else:
+                    consecutive_empty_pages = 0
+                    all_utxos.extend(page_utxos)
+                    print(f"[payout] Page {utxo_page}: {len(page_utxos)} UTXOs (total: {len(all_utxos)})", flush=True)
+                
+                # Check if there are more pages using the correct fields
+                current_page = pagination_info.get("current_page", utxo_page)
+                total_pages = pagination_info.get("total_pages", 1)
+                has_next = pagination_info.get("has_next", False)
+                
+                # Stop if we've reached the last page
+                if current_page >= total_pages or not has_next:
+                    print(f"[payout] Reached last page ({current_page}/{total_pages})", flush=True)
                     break
                 
-                all_utxos.extend(page_utxos)
-                print(f"[payout] Fetched page {utxo_page}: {len(page_utxos)} UTXOs (total: {len(all_utxos)})", flush=True)
-                
-                # Check if there are more pages
-                # Pagination info is nested in utxo_pagination object
-                pagination_info = address_resp.get("utxo_pagination", {})
-                has_next_page = pagination_info.get("has_next", False)
-                if not has_next_page:
+                # Safety check: stop if we're not making progress (duplicate pages)
+                if len(all_utxos) == last_utxo_count and page_utxos:
+                    print(f"[payout] WARNING: Page {utxo_page} has same UTXOs, stopping to prevent infinite loop", flush=True)
                     break
                 
+                last_utxo_count = len(all_utxos)
                 utxo_page += 1
+                
             except Exception as e:
                 print(f"[payout] Error fetching UTXO page {utxo_page}: {e}", flush=True)
                 break
         
-        print(f"[payout] Total UTXOs fetched from {utxo_page} pages: {len(all_utxos)}", flush=True)
+        print(f"[payout] Pagination complete: fetched {len(all_utxos)} total UTXOs from pages 1-{utxo_page}", flush=True)
         utxos = all_utxos
         
         # Filter mature coinbase (height + 2000 <= current)
