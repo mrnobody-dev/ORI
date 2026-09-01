@@ -524,9 +524,37 @@ def auto_payout_check():
         
         cfg = Config.from_env()
         
-        # Get pool UTXOs (mature coinbase only)
-        _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}")
-        utxos = address_resp.get("utxos", [])
+        # Get pool UTXOs with pagination (mature coinbase only)
+        # The API returns paginated results (10 per page by default)
+        # We need to fetch all pages to ensure mature UTXOs aren't missed
+        all_utxos = []
+        utxo_page = 1
+        max_pages = 500  # Safety limit
+        
+        while utxo_page <= max_pages:
+            try:
+                _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}?utxo_page={utxo_page}")
+                page_utxos = address_resp.get("utxos", [])
+                
+                if not page_utxos:
+                    # Empty page means we've reached the end
+                    break
+                
+                all_utxos.extend(page_utxos)
+                print(f"[payout] Fetched page {utxo_page}: {len(page_utxos)} UTXOs (total: {len(all_utxos)})", flush=True)
+                
+                # Check if there are more pages
+                has_next_page = address_resp.get("has_next_page", False)
+                if not has_next_page:
+                    break
+                
+                utxo_page += 1
+            except Exception as e:
+                print(f"[payout] Error fetching UTXO page {utxo_page}: {e}", flush=True)
+                break
+        
+        print(f"[payout] Total UTXOs fetched from {utxo_page} pages: {len(all_utxos)}", flush=True)
+        utxos = all_utxos
         
         # Filter mature coinbase (height + 2000 <= current)
         MATURITY = cfg.coinbase_maturity
