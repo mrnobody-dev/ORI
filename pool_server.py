@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
+from queue import Queue
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hashlib
@@ -526,7 +527,7 @@ def auto_payout_check():
         
         # Get pool UTXOs with pagination (mature coinbase only)
         # Get pool UTXOs with pagination (mature coinbase only)
-        # The API returns paginated results (10 per page by default)
+        # Fetch 100 UTXOs per page to minimize API calls (default is 10)
         # We need to fetch all pages to ensure mature UTXOs aren't missed
         all_utxos = []
         utxo_page = 1
@@ -536,7 +537,7 @@ def auto_payout_check():
         
         while utxo_page <= max_pages:
             try:
-                _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}?utxo_page={utxo_page}")
+                _, address_resp = _req("GET", f"/address/{POOL_ADDRESS}?utxo_page={utxo_page}&utxo_limit=100")
                 page_utxos = address_resp.get("utxos", [])
                 pagination_info = address_resp.get("utxo_pagination", {})
                 
@@ -969,9 +970,9 @@ def pool_submit(body: SubmitReq):
         payout = LEDGER.credit_block(int(job["reward_sats"]), int(job["height"]))
         TPL.refresh()
         
-        # Trigger auto-payout check after block found
+        # Trigger auto-payout check after block found (in background to not block response)
         if ENABLE_AUTO_PAYOUT:
-            auto_payout_check()
+            threading.Thread(target=auto_payout_check, daemon=True, name="payout-check").start()
         
         return {
             "accepted": True,
